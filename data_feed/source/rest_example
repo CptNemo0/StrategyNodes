@@ -1,0 +1,121 @@
+// Boost.Beast HTTPS GET — fetches the Coinbase Exchange product book.
+//   curl --request GET https://api.exchange.coinbase.com/products/BTC-USD/book
+// Endpoint docs:
+//   https://docs.cdp.coinbase.com/api-reference/exchange-api/rest-api/products/get-product-book
+
+#include <boost/asio/ssl/stream.hpp>
+#include <iostream>
+#include <string>
+
+// OpenSSL X.509 — used to decode DER certs from the Windows ROOT store.
+// https://docs.openssl.org/master/man3/d2i_X509/
+#include <openssl/x509.h>
+#include <string_view>
+
+// crypt32.lib provides CertOpenSystemStoreA et al.
+#pragma comment(lib, "crypt32.lib")
+
+// Boost.Asio: cross-platform async I/O.
+// https://www.boost.org/doc/libs/release/doc/html/boost_asio.html
+#include <boost/asio/connect.hpp>
+#include <boost/asio/ssl.hpp>
+
+// Boost.Beast: HTTP/WebSocket on top of Asio.
+// https://www.boost.org/doc/libs/release/libs/beast/doc/html/beast/using_http.html
+#include <boost/beast/core.hpp> // flat_buffer
+#include <boost/beast/http.hpp> // http::request, http::response, http::read, http::write
+#include <boost/beast/ssl.hpp> // teardown helpers for ssl::stream
+
+// windows.h must precede wincrypt.h.
+#include <wincrypt.h>
+#include <windows.h>
+
+namespace beast = boost::beast;
+namespace http = beast::http;
+namespace asio = boost::asio;
+namespace ssl = asio::ssl;
+using tcp = asio::ip::tcp;
+
+namespace {
+
+constexpr std::string_view kHost = "api.exchange.coinbase.com";
+constexpr std::string_view kPort = "443";
+constexpr std::string_view kTarget = "/products/BTC-USD/book?level=2";
+constexpr int kHttpVersion = 11; // HTTP/1.1
+
+} // namespace
+
+struct RequestParams {
+  ssl::stream<tcp::socket> &stream;
+  beast::flat_buffer &buffer;
+
+  std::string_view host_address;
+  std::string_view target;
+  int http_version = 11;
+};
+
+void LoadWindowsCerts(ssl::context &ssl_ctx) {
+  // ── Load Windows Trusted Root CAs into OpenSSL ─────────────────────────
+  // OpenSSL does not consult the Windows cert store automatically; walk it
+  // ourselves and inject each certificate into OpenSSL's X509_STORE.
+  // https://learn.microsoft.com/en-us/windows/win32/api/wincrypt/nf-wincrypt-certopensystemstorea
+  HCERTSTORE win_store = CertOpenSystemStoreA(0, "ROOT");
+  X509_STORE *ssl_store = SSL_CTX_get_cert_store(ssl_ctx.native_handle());
+  for (PCCERT_CONTEXT cert = nullptr;
+       (cert = CertEnumCertificatesInStore(win_store, cert)) != nullptr;) {
+    const unsigned char *p = cert->pbCertEncoded;
+    X509 *x509 = d2i_X509(nullptr, &p, cert->cbCertEncoded);
+    if (x509) {
+      X509_STORE_add_cert(ssl_store, x509);
+      X509_free(x509);
+    }
+  }
+  CertCloseStore(win_store, 0);
+  ssl_ctx.set_verify_mode(ssl::verify_peer);
+};
+
+void Connect(ssl::stream<tcp::socket> &stream, asio::io_context &context_io,
+             std::string_view host, std::string_view port) {
+  asio::connect(stream.next_layer(),
+                tcp::resolver{context_io}.resolve(host, port));
+  SSL_set_tlsext_host_name(stream.native_handle(), host.data());
+  stream.handshake(ssl::stream_base::client);
+}
+
+void MakeRequest(RequestParams parameters) {
+  http::request<http::empty_body> http_request{
+      http::verb::get, parameters.target, parameters.http_version};
+  http::response<http::string_body> http_response;
+
+  // ── Send + receive ─────────────────────────────────────────────────────
+  // https://www.boost.org/doc/libs/release/libs/beast/doc/html/beast/ref/boost__beast__http__write.html
+  http_request.set(http::field::host, parameters.host_address);
+  http_request.set(http::field::user_agent, "trading_system/0.1");
+  http_request.set(http::field::accept, "application/json");
+  http::write(parameters.stream, http_request);
+  http::read(parameters.stream, parameters.buffer, http_response);
+
+  std::cout << http_response.body() << "\n";
+}
+
+int main() {
+  // ── Endpoint ─────────────────────────────────────────────────────────────
+
+  asio::io_context context_io;
+  ssl::context context_ssl{ssl::context::tls_client};
+  ssl::stream<tcp::socket> stream{context_io, context_ssl};
+
+  beast::flat_buffer buf;
+  RequestParams parameters{stream, buf, kHost, kTarget, 11};
+
+  LoadWindowsCerts(context_ssl);
+  Connect(stream, context_io, kHost, kPort);
+  MakeRequest(parameters);
+
+  // ── Graceful TLS shutdown ──────────────────────────────────────────────
+  // Many servers (Coinbase included) close their side first, which OpenSSL
+  // surfaces as stream_truncated / eof. Both are benign for HTTPS.
+  boost::system::error_code ec;
+  stream.shutdown(ec);
+  return 0;
+}
