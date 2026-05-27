@@ -1,6 +1,7 @@
 #ifndef DATA_FEED_ALIASING_H_
 #define DATA_FEED_ALIASING_H_
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 
@@ -16,5 +17,7 @@ using u64 = std::uint64_t;
 
 using f32 = float;
 using f64 = double;
+
+using id31 = std::array<char, 31>;
 
 #endif //! DATA_FEED_ALIASING_H_

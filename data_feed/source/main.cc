@@ -27,17 +27,17 @@
 const std::filesystem::path test_path{
     R"(C:\Users\pawel\Desktop\Programowanie\trading_system\example_responses\orderbook\level1.txt)"};
 
-class ThreadedJsonOrderbookParser {
-public:
+class Level3ParserThreaded {
+ public:
   void Parse(std::string_view json) {
-    delta_ = {}; // reset across repeated Parse() calls.
+    delta_ = {};  // reset across repeated Parse() calls.
 
     // Sort `kFieldNames` array ascending by length, this way when two names
     // start with the same prefix (for example: auction and auction_mode), a
     // first one that appears is the longer one. This eliminates selecting a
     // wrong one by partially matching a prefix.
     std::ranges::sort(kFieldNames,
-                      [](const NameFunctionPair &a, const NameFunctionPair &b) {
+                      [](const NameFunctionPair& a, const NameFunctionPair& b) {
                         return a.first.size() > b.first.size();
                       });
 
@@ -45,15 +45,15 @@ public:
 
     std::vector<std::jthread> threads;
     for (auto i{0uz}; i < kFieldNames.size(); ++i) {
-      threads.emplace_back(&ThreadedJsonOrderbookParser::WorkerThread, this,
+      threads.emplace_back(&Level3ParserThreaded::WorkerThread, this,
                            segments_[i]);
     }
   };
 
-  const OrderbookDelta &delta() { return delta_; }
+  const OrderbookDelta& delta() { return delta_; }
 
-private:
-  using FieldHandler = void (ThreadedJsonOrderbookParser::*)(std::string_view);
+ private:
+  using FieldHandler = void (Level3ParserThreaded::*)(std::string_view);
   using NameFunctionPair = std::pair<std::string_view, FieldHandler>;
 
   // Segments the json into `segments_count` separate spans. This function is
@@ -90,8 +90,7 @@ private:
   }
 
   void WorkerThread(std::string_view json) {
-
-    for (const auto &[field_name, function] : kFieldNames) {
+    for (const auto& [field_name, function] : kFieldNames) {
       // Current line too short to even consider that `field_name`.
       if (field_name.size() >= json.size()) {
         continue;
@@ -114,8 +113,9 @@ private:
 
   void HandleSequence(std::string_view segment) {
     const auto colon = segment.find(':');
-    if (colon == std::string_view::npos)
+    if (colon == std::string_view::npos) {
       return;
+    }
     std::from_chars(segment.data() + colon + 1, segment.data() + segment.size(),
                     delta_.sequence);
   }
@@ -129,10 +129,11 @@ private:
   // Parses the `[["<price>","<size>",<qty>], ...]` array sitting inside the
   // segment and appends one `OrderbookEntry` per triplet.
   static void ParseLadder(std::string_view segment,
-                          std::vector<OrderbookEntry> &out) {
+                          std::vector<OrderbookEntry>& out) {
     u64 i = segment.find('[');
-    if (i == std::string_view::npos)
+    if (i == std::string_view::npos) {
       return;
+    }
     // past outer '['
     ++i;
 
@@ -147,13 +148,15 @@ private:
       OrderbookEntry entry{};
 
       // Price and size are quoted strings: skip to '"', read until next '"'.
-      auto read_quoted_double = [&](f64 &dst) {
-        while (i < segment.size() && segment[i] != '"')
+      auto read_quoted_double = [&](f64& dst) {
+        while (i < segment.size() && segment[i] != '"') {
           ++i;
+        }
         ++i;
         const u64 start = i;
-        while (i < segment.size() && segment[i] != '"')
+        while (i < segment.size() && segment[i] != '"') {
           ++i;
+        }
         std::from_chars(segment.data() + start, segment.data() + i, dst);
         // past closing '"'
         ++i;
@@ -162,12 +165,14 @@ private:
       read_quoted_double(entry.size);
 
       // Quantity is a bare integer: skip to ',', read until ']'.
-      while (i < segment.size() && segment[i] != ',')
+      while (i < segment.size() && segment[i] != ',') {
         ++i;
+      }
       ++i;
       const u64 qty_start = i;
-      while (i < segment.size() && segment[i] != ']')
+      while (i < segment.size() && segment[i] != ']') {
         ++i;
+      }
       std::from_chars(segment.data() + qty_start, segment.data() + i,
                       entry.quantity);
       // past inner ']'
@@ -178,12 +183,12 @@ private:
   }
 
   std::array<NameFunctionPair, 6> kFieldNames{{
-      {"auction_mode", &ThreadedJsonOrderbookParser::HandleAuctionMode},
-      {"sequence", &ThreadedJsonOrderbookParser::HandleSequence},
-      {"auction", &ThreadedJsonOrderbookParser::HandleAuction},
-      {"asks", &ThreadedJsonOrderbookParser::HandleAsks},
-      {"bids", &ThreadedJsonOrderbookParser::HandleBids},
-      {"time", &ThreadedJsonOrderbookParser::HandleTime},
+      {"auction_mode", &Level3ParserThreaded::HandleAuctionMode},
+      {"sequence", &Level3ParserThreaded::HandleSequence},
+      {"auction", &Level3ParserThreaded::HandleAuction},
+      {"asks", &Level3ParserThreaded::HandleAsks},
+      {"bids", &Level3ParserThreaded::HandleBids},
+      {"time", &Level3ParserThreaded::HandleTime},
   }};
 
   std::vector<std::string_view> segments_;
@@ -191,7 +196,6 @@ private:
 };
 
 int main() {
-
   std::ifstream file{test_path, std::ios::in};
   std::string contents{(std::istreambuf_iterator<char>(file)),
                        std::istreambuf_iterator<char>()};
@@ -206,13 +210,13 @@ int main() {
   // route the same char ranges through std::from_chars, so doubles compare
   // bitwise-equal — defaulted operator== on OrderbookEntry/OrderbookDelta is
   // sufficient. Verbose diff below if they ever diverge.
-  ThreadedJsonOrderbookParser eq_threaded;
+  Level3ParserThreaded eq_threaded;
   JsonOrderbookParser eq_single;
   eq_threaded.Parse(contents);
   eq_single.Parse(contents);
 
-  const auto &a = eq_threaded.delta();
-  const auto &b = eq_single.delta();
+  const auto& a = eq_threaded.delta();
+  const auto& b = eq_single.delta();
 
   auto report_mismatch = [&] {
     std::println("EQUALITY: MISMATCH");
@@ -227,9 +231,9 @@ int main() {
       std::println("  asks size: threaded={} single={}", a.asks_.size(),
                    b.asks_.size());
     }
-    const auto diff_n = [&](const char *side,
-                            const std::vector<OrderbookEntry> &x,
-                            const std::vector<OrderbookEntry> &y) {
+    const auto diff_n = [&](const char* side,
+                            const std::vector<OrderbookEntry>& x,
+                            const std::vector<OrderbookEntry>& y) {
       const u64 n = std::min(x.size(), y.size());
       int shown = 0;
       for (u64 i = 0; i < n && shown < 5; ++i) {
@@ -257,10 +261,11 @@ int main() {
   constexpr int kWarmup = 100;
   constexpr int kIter = 1000;
 
-  auto bench = [&](const char *label, auto run_once) {
+  auto bench = [&](const char* label, auto run_once) {
     // Warmup: prime caches, branch predictors, allocator arenas.
-    for (int i = 0; i < kWarmup; ++i)
+    for (int i = 0; i < kWarmup; ++i) {
       run_once();
+    }
 
     std::vector<i64> samples;
     samples.reserve(kIter);
@@ -286,7 +291,7 @@ int main() {
   };
 
   bench("threaded:", [&] {
-    ThreadedJsonOrderbookParser p;
+    Level3ParserThreaded p;
     p.Parse(contents);
   });
 

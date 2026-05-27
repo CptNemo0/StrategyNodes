@@ -4,8 +4,10 @@
 
 namespace data_feed {
 
-DataFeed::DataFeed() { std::println("Hello World"); };
+DataFeed::DataFeed() {
+  std::println("Hello World");
+};
 
 DataFeed::~DataFeed() {}
 
-} // namespace data_feed
+}  // namespace data_feed
