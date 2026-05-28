@@ -18,6 +18,6 @@ using u64 = std::uint64_t;
 using f32 = float;
 using f64 = double;
 
-using id31 = std::array<char, 31>;
+using id36 = std::array<char, 36>;
 
-#endif //! DATA_FEED_ALIASING_H_
+#endif  //! DATA_FEED_ALIASING_H_
