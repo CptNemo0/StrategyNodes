@@ -2,12 +2,14 @@
 
 #include <algorithm>
 #include <limits>
+#include <memory>
+#include <stdexcept>
 #include <string_view>
 #include <thread>
 
-void Level3ParserThreaded::Parse(std::string_view json) {
-  delta_ = {};  // reset across repeated Parse() calls.
+#include "orderbook_delta.h"
 
+Level3ParserThreaded::Level3ParserThreaded() {
   // Sort `kFieldNames` array ascending by length, this way when two names
   // start with the same prefix (for example: auction and auction_mode), a
   // first one that appears is the longer one. This eliminates selecting a
@@ -16,22 +18,43 @@ void Level3ParserThreaded::Parse(std::string_view json) {
                     [](const NameFunctionPair& a, const NameFunctionPair& b) {
                       return a.first.size() > b.first.size();
                     });
-
-  SegmentOriginalJson(json, kFieldNames.size());
-
-  std::vector<std::jthread> threads;
-  for (auto i{0uz}; i < kFieldNames.size(); ++i) {
-    threads.emplace_back(&Level3ParserThreaded::WorkerThread, this,
-                         segments_[i]);
-  }
 }
 
-void Level3ParserThreaded::SegmentOriginalJson(std::string_view json,
-                                               u64 segments_count) {
+std::unique_ptr<OrderbookDelta> Level3ParserThreaded::Parse(
+    std::string_view json) {
+  const std::vector<std::string_view> segments =
+      SegmentOriginalJson(json, kFieldNames.size());
+
+  if (segments.size() != kFieldNames.size()) {
+    return nullptr;
+  }
+
+  const u64 estimated_side_size =
+      static_cast<u64>(static_cast<float>(json.length()) * 0.5f * 1.1f);
+
+  std::unique_ptr<OrderbookDelta> delta = std::make_unique<OrderbookDelta>();
+
+  delta->asks_.reserve(estimated_side_size);
+  delta->bids_.reserve(estimated_side_size);
+
+  {
+    std::vector<std::jthread> threads;
+    for (auto i{0uz}; i < kFieldNames.size(); ++i) {
+      threads.emplace_back(&Level3ParserThreaded::WorkerThread, this,
+                           segments[i], delta.get());
+    }
+  }
+
+  return delta;
+}
+
+std::vector<std::string_view> Level3ParserThreaded::SegmentOriginalJson(
+    std::string_view json,
+    u64 segments_count) {
   constexpr u64 kNone = std::numeric_limits<u64>::max();
 
-  segments_ = std::vector<std::string_view>{};
-  segments_.reserve(segments_count);
+  std::vector<std::string_view> segments = std::vector<std::string_view>{};
+  segments.reserve(segments_count);
 
   auto is_space = [](char c) {
     return c == ' ' || c == '\n' || c == '\t' || c == '\r';
@@ -45,7 +68,7 @@ void Level3ParserThreaded::SegmentOriginalJson(std::string_view json,
   // points at the field name (just past the key's opening quote), so there is
   // no leading whitespace to trim. Each segment looks like `name":<value>`.
   auto new_field = [&](u64 start, u64 end) {
-    segments_.emplace_back(json.data() + start, json.data() + end);
+    segments.emplace_back(json.data() + start, json.data() + end);
     field_start = kNone;
   };
 
@@ -91,9 +114,11 @@ void Level3ParserThreaded::SegmentOriginalJson(std::string_view json,
         break;
     }
   }
+  return segments;
 }
 
-void Level3ParserThreaded::WorkerThread(std::string_view json) {
+void Level3ParserThreaded::WorkerThread(std::string_view json,
+                                        OrderbookDelta* delta) {
   for (const auto& [field_name, function] : kFieldNames) {
     // Current line too short to even consider that `field_name`.
     if (field_name.size() >= json.size()) {
@@ -102,26 +127,29 @@ void Level3ParserThreaded::WorkerThread(std::string_view json) {
 
     if (field_name ==
         std::string_view{json.data(), json.data() + field_name.size()}) {
-      (this->*function)(json);
+      (this->*function)(json, delta);
     }
   }
 }
 
-void Level3ParserThreaded::HandleAsks(std::string_view segment) {
-  ParseLadder(segment, delta_.asks_);
+void Level3ParserThreaded::HandleAsks(std::string_view segment,
+                                      OrderbookDelta* delta) {
+  ParseLadder(segment, delta->asks_);
 }
 
-void Level3ParserThreaded::HandleBids(std::string_view segment) {
-  ParseLadder(segment, delta_.bids_);
+void Level3ParserThreaded::HandleBids(std::string_view segment,
+                                      OrderbookDelta* delta) {
+  ParseLadder(segment, delta->bids_);
 }
 
-void Level3ParserThreaded::HandleSequence(std::string_view segment) {
+void Level3ParserThreaded::HandleSequence(std::string_view segment,
+                                          OrderbookDelta* delta) {
   const auto colon = segment.find(':');
   if (colon == std::string_view::npos) {
     return;
   }
   std::from_chars(segment.data() + colon + 1, segment.data() + segment.size(),
-                  delta_.sequence);
+                  delta->sequence);
 }
 
 void Level3ParserThreaded::ParseLadder(std::string_view segment,

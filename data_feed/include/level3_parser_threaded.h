@@ -10,12 +10,13 @@
 
 class Level3ParserThreaded {
  public:
-  void Parse(std::string_view json);
+  Level3ParserThreaded();
 
-  const OrderbookDelta& delta() { return delta_; }
+  std::unique_ptr<OrderbookDelta> Parse(std::string_view json);
 
  private:
-  using FieldHandler = void (Level3ParserThreaded::*)(std::string_view);
+  using FieldHandler = void (Level3ParserThreaded::*)(std::string_view,
+                                                      OrderbookDelta*);
   using NameFunctionPair = std::pair<std::string_view, FieldHandler>;
 
   // Segments the root JSON object into one string_view per top-level field,
@@ -23,19 +24,20 @@ class Level3ParserThreaded {
   // verbatim). Tracks string state and brace/bracket depth, so it is robust to
   // whitespace/pretty-printing and to commas nested inside arrays or strings.
   // `segments_count` is only a reserve hint.
-  void SegmentOriginalJson(std::string_view json, u64 segments_count);
+  std::vector<std::string_view> SegmentOriginalJson(std::string_view json,
+                                                    u64 segments_count);
 
-  void WorkerThread(std::string_view json);
+  void WorkerThread(std::string_view json, OrderbookDelta* delta);
 
-  void HandleAsks(std::string_view segment);
+  void HandleAsks(std::string_view segment, OrderbookDelta* delta);
 
-  void HandleBids(std::string_view segment);
+  void HandleBids(std::string_view segment, OrderbookDelta* delta);
 
-  void HandleSequence(std::string_view segment);
+  void HandleSequence(std::string_view segment, OrderbookDelta* delta);
 
-  void HandleAuctionMode([[maybe_unused]] std::string_view) {}
-  void HandleAuction([[maybe_unused]] std::string_view) {}
-  void HandleTime([[maybe_unused]] std::string_view) {}
+  void HandleAuctionMode([[maybe_unused]] std::string_view, OrderbookDelta*) {}
+  void HandleAuction([[maybe_unused]] std::string_view, OrderbookDelta*) {}
+  void HandleTime([[maybe_unused]] std::string_view, OrderbookDelta*) {}
 
   void ParseLadder(std::string_view segment, std::vector<Order>& out);
 
@@ -58,9 +60,6 @@ class Level3ParserThreaded {
       {"bids", &Level3ParserThreaded::HandleBids},
       {"time", &Level3ParserThreaded::HandleTime},
   }};
-
-  std::vector<std::string_view> segments_;
-  OrderbookDelta delta_;
 };
 
 #endif  // !DATA_FEED_LEVEL_3_PARSER_THREDED_H_
