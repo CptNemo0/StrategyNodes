@@ -20,8 +20,8 @@
 #include <utility>
 
 #include "channels_enum.h"
-#include "credentials.h"
-#include "signer.h"
+#include "kraken_credentials.h"
+#include "kraken_websocket_token_generator.h"
 #include "tls_context.h"
 #include "websocket_subscription.h"
 
@@ -49,8 +49,8 @@ class WebsocketDataFeed {
 
   WebsocketDataFeed(std::string_view product_id,
                     TlsContext& tls,
-                    const Signer& signer,
-                    const Credentials& credentials,
+                    const KrakenWebsocketTokenGenerator& signer,
+                    const KrakenCredentials& credentials,
                     Handler handler,
                     Endpoint endpoint = Endpoint::kSandbox)
       : product_id_(std::move(product_id)),
@@ -79,7 +79,8 @@ class WebsocketDataFeed {
     const std::unique_ptr<WebSocketSubscription> subscription =
         WebSocketSubscriptionBuilder{}
             .AddProduct(product_id_)
-            .AddChannel(Channels::kMatches)
+            .AddChannel(Channels::kFull)
+            .Authenticate(signer, credentials)
             .Build();
     const std::string message = subscription->to_json();
     ws_.write(asio::buffer(message));
@@ -121,7 +122,7 @@ class WebsocketDataFeed {
   static Host HostFor(Endpoint endpoint) {
     switch (endpoint) {
       case Endpoint::kProduction:
-        return {"ws-feed.exchange.coinbase.com", "443"};
+        return {"ws-direct.exchange.coinbase.com", "443"};
       case Endpoint::kSandbox:
       default:
         return {"ws-feed-public.sandbox.exchange.coinbase.com", "443"};
@@ -142,6 +143,7 @@ class WebsocketDataFeed {
       // the string from here on.
       const auto data = buf_.data();
       std::string message(static_cast<const char*>(data.data()), data.size());
+      std::println("{}", message);
       buf_.clear();
       handler_.OnDataReceived(std::move(message));
       StartRead();

@@ -13,8 +13,8 @@
 #include <vector>
 
 #include "channels_enum.h"
-#include "credentials.h"
-#include "signer.h"
+#include "kraken_credentials.h"
+#include "kraken_websocket_token_generator.h"
 
 namespace data_feed {
 
@@ -91,18 +91,18 @@ WebSocketSubscriptionBuilder& WebSocketSubscriptionBuilder::AddChannel(
 }
 
 WebSocketSubscriptionBuilder& WebSocketSubscriptionBuilder::Authenticate(
-    const Signer& signer,
-    const Credentials& credentials) {
+    const KrakenWebsocketTokenGenerator& signer,
+    const KrakenCredentials& credentials) {
   std::unique_ptr<SubscriptionAuth> auth = std::make_unique<SubscriptionAuth>();
 
-  Signer::Result result = signer.GenerateSignature();
-  auth->signature = std::move(result.b64_signature);
-  auth->timestamp = std::move(result.timestamp);
+  // KrakenWebsocketTokenGenerator::Result result = signer.GenerateSignature();
+  // auth->signature = std::move(result.b64_signature);
+  // auth->timestamp = std::move(result.timestamp);
 
-  auth->key = credentials.key();
-  auth->passphrase = credentials.passphrase();
+  // auth->key = credentials.public_key();
+  // auth->passphrase = "";
 
-  subscription_->auth_ = std::move(auth);
+  // subscription_->auth_ = std::move(auth);
   return *this;
 }
 

@@ -1,6 +1,7 @@
 #ifndef DATA_FEED_LEVEL_3_PARSER_THREDED_H_
 #define DATA_FEED_LEVEL_3_PARSER_THREDED_H_
 
+#include <memory>
 #include <optional>
 #include <string_view>
 #include <vector>

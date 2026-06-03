@@ -10,8 +10,8 @@
 
 namespace data_feed {
 
-class Credentials;
-class Signer;
+class KrakenCredentials;
+class KrakenWebsocketTokenGenerator;
 
 // Authentication block embedded in an authenticated subscription. Required by
 // the full/user/level2/level3/rfq_matches channels.
@@ -61,8 +61,9 @@ class WebSocketSubscriptionBuilder {
 
   // Generates a fresh signature + timestamp via `signer` and attaches it
   // together with the key and passphrase from `credentials`.
-  WebSocketSubscriptionBuilder& Authenticate(const Signer& signer,
-                                             const Credentials& credentials);
+  WebSocketSubscriptionBuilder& Authenticate(
+      const KrakenWebsocketTokenGenerator& signer,
+      const KrakenCredentials& credentials);
 
   // Validates the accumulated subscription and returns ownership of it, leaving
   // the builder reset for reuse. Throws std::invalid_argument if there are no

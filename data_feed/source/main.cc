@@ -4,8 +4,9 @@
 #include <print>
 #include <string>
 
-#include "credentials.h"
-#include "signer.h"
+#include "kraken_credentials.h"
+#include "kraken_websocket_token_generator.h"
+#include "rapidjson/rapidjson.h"
 #include "tls_context.h"
 #include "websocket_data_feed.h"
 
@@ -21,24 +22,26 @@ struct LoggingHandler {
 
 int main() {
   try {
-    const std::unique_ptr<data_feed::Credentials> credentials =
-        data_feed::Credentials::FromEnvironment();
+    const std::unique_ptr<data_feed::KrakenCredentials> credentials =
+        data_feed::KrakenCredentials::FromEnvironment();
     data_feed::TlsContext tls;
-    const data_feed::Signer signer{*credentials};
+    const data_feed::KrakenWebsocketTokenGenerator signer{*credentials};
+    auto ptr = signer.GenerateToken();
+    std::println("{}", ptr.get()->get());
+    //// Subscribes to the authenticated "full" channel for BTC-USD and logs
+    /// every / event until Enter is pressed. Production endpoint: the "full"
+    /// channel / requires auth, and Exchange production keys are not valid
+    /// against the / separate sandbox environment.
+    // using Feed = data_feed::WebsocketDataFeed<LoggingHandler>;
+    // Feed feed{"BTC-USD",        tls,
+    //           signer,           *credentials,
+    //           LoggingHandler{}, Feed::Endpoint::kProduction};
 
-    // Subscribes to the authenticated "full" channel for BTC-USD and logs every
-    // event until Enter is pressed. Production endpoint: the "full" channel
-    // requires auth, and Exchange production keys are not valid against the
-    // separate sandbox environment.
-    using Feed = data_feed::WebsocketDataFeed<LoggingHandler>;
-    Feed feed{"BTC-USD",         tls, signer, *credentials, LoggingHandler{},
-              Feed::Endpoint::kProduction};
+    // std::println("Streaming BTC-USD 'full' channel. Press Enter to stop.");
+    // std::string line;
+    // std::getline(std::cin, line);
 
-    std::println("Streaming BTC-USD 'full' channel. Press Enter to stop.");
-    std::string line;
-    std::getline(std::cin, line);
-
-    feed.Stop();
+    // feed.Stop();
   } catch (const std::exception& e) {
     std::cerr << "Fatal: " << e.what() << "\n";
     return 1;

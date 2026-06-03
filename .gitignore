@@ -2,6 +2,7 @@
 .zed/
 .claude/
 build/
-build_commands.md
+BUILD_COMMANDS.md
 codebook.toml
 compile_commands.json
+__cmake_systeminformation/
