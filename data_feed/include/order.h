@@ -2,7 +2,6 @@
 #define DATA_FEED_ORDER_H_
 
 #include <format>
-#include <print>
 #include <string_view>
 
 #include "aliasing.h"

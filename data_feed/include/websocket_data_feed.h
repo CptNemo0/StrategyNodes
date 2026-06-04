@@ -1,18 +1,27 @@
 #ifndef DATA_FEED_WEBSOCKET_DATA_FEED_H_
 #define DATA_FEED_WEBSOCKET_DATA_FEED_H_
 
+#include <openssl/tls1.h>
+
 #include <atomic>
 #include <boost/asio/connect.hpp>
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/asio/post.hpp>
 #include <boost/asio/ssl.hpp>
+#include <boost/asio/ssl/stream.hpp>
+#include <boost/asio/ssl/stream_base.hpp>
 #include <boost/beast/core.hpp>
+#include <boost/beast/core/error.hpp>
+#include <boost/beast/core/flat_buffer.hpp>
+#include <boost/beast/core/stream_traits.hpp>
 #include <boost/beast/websocket.hpp>
+#include <boost/beast/websocket/rfc6455.hpp>
 #include <boost/beast/websocket/ssl.hpp>
-#include <concepts>
+#include <boost/beast/websocket/stream.hpp>
 #include <cstddef>
 #include <memory>
+#include <print>
 #include <stdexcept>
 #include <string>
 #include <string_view>

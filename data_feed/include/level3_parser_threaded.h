@@ -1,12 +1,15 @@
 #ifndef DATA_FEED_LEVEL_3_PARSER_THREDED_H_
 #define DATA_FEED_LEVEL_3_PARSER_THREDED_H_
 
+#include <array>
 #include <memory>
 #include <optional>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "aliasing.h"
+#include "order.h"
 #include "orderbook_delta.h"
 
 class Level3ParserThreaded {

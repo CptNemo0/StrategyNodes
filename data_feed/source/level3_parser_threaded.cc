@@ -1,12 +1,18 @@
 #include "level3_parser_threaded.h"
 
 #include <algorithm>
+#include <charconv>
 #include <limits>
 #include <memory>
-#include <stdexcept>
+#include <optional>
+#include <print>
 #include <string_view>
 #include <thread>
+#include <utility>
+#include <vector>
 
+#include "aliasing.h"
+#include "order.h"
 #include "orderbook_delta.h"
 
 Level3ParserThreaded::Level3ParserThreaded() {
@@ -158,7 +164,7 @@ void Level3ParserThreaded::ParseLadder(std::string_view segment,
   u64 i = segment.find('[');
 
   // If no '[' is found the passed json fragment must be ill-formed.
-  if (i == std::string::npos) {
+  if (i == std::string_view::npos) {
     return;
   }
 

@@ -6,9 +6,7 @@
 
 #include "kraken_credentials.h"
 #include "kraken_websocket_token_generator.h"
-#include "rapidjson/rapidjson.h"
 #include "tls_context.h"
-#include "websocket_data_feed.h"
 
 namespace {
 

@@ -3,15 +3,27 @@
 #include <openssl/evp.h>
 #include <openssl/hmac.h>
 #include <openssl/sha.h>
+#include <openssl/tls1.h>
 
 #include <array>
 #include <boost/asio/connect.hpp>
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/asio/ssl.hpp>
+#include <boost/asio/ssl/stream_base.hpp>
 #include <boost/beast/core.hpp>
+#include <boost/beast/core/error.hpp>
+#include <boost/beast/core/flat_buffer.hpp>
+#include <boost/beast/core/stream_traits.hpp>
+#include <boost/beast/core/tcp_stream.hpp>
 #include <boost/beast/http.hpp>
+#include <boost/beast/http/field.hpp>
+#include <boost/beast/http/impl/read.hpp>
+#include <boost/beast/http/message_fwd.hpp>
+#include <boost/beast/http/string_body_fwd.hpp>
+#include <boost/beast/http/verb.hpp>
 #include <boost/beast/ssl.hpp>
+#include <boost/beast/ssl/ssl_stream.hpp>
 #include <chrono>
 #include <cstddef>
 #include <format>

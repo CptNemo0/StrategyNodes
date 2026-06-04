@@ -1,14 +1,11 @@
 #ifndef DATA_FEED_ORDERBOOK_DELTA_H_
 #define DATA_FEED_ORDERBOOK_DELTA_H_
 
-#include <cstddef>
-#include <print>
-#include <string>
+#include <format>
 #include <vector>
 
 #include "aliasing.h"
 #include "order.h"
-#include "orderbook_entry.h"
 
 struct OrderbookDelta;
 

@@ -1,9 +1,7 @@
 CompileFlags:
-  Add:
-  [
-    -std=c++23
-  ]
+  Add: [-std=c++26]
+  Remove: [-fmodules-ts, -fmodule-mapper=*, -fdeps-*]
 
 Diagnostics:
-  MissingIncludes: None
-  UnusedIncludes: None
+  MissingIncludes: Strict
+  UnusedIncludes: Strict

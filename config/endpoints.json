@@ -1,0 +1,6 @@
+{
+  "kraken": {
+    "get_access_token": "https://api.kraken.com/0/private/GetWebSocketsToken",
+    "order_book_level3": "wss://ws-l3.kraken.com/v2"
+  }
+}

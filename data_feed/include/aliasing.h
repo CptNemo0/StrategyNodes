@@ -2,7 +2,6 @@
 #define DATA_FEED_ALIASING_H_
 
 #include <array>
-#include <cstddef>
 #include <cstdint>
 
 using i8 = std::int8_t;

@@ -1,6 +1,12 @@
 #include "tls_context.h"
 
+#include <openssl/crypto.h>
+#include <openssl/ssl.h>
+#include <openssl/x509_vfy.h>
+
 #include <boost/asio/ssl.hpp>
+#include <boost/asio/ssl/context.hpp>
+#include <boost/asio/ssl/verify_mode.hpp>
 
 #ifdef _WIN32
 #include <windows.h>

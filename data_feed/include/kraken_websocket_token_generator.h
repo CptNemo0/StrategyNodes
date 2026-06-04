@@ -2,9 +2,6 @@
 #define DATA_FEED_SIGNER_H_
 
 #include <memory>
-#include <span>
-#include <string>
-#include <string_view>
 
 #include "kraken_credentials.h"
 #include "kraken_websocket_token.h"

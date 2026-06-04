@@ -1,5 +1,10 @@
 #include "channels_enum.h"
 
+#include <array>
+#include <optional>
+#include <string_view>
+#include <utility>
+
 namespace {
 
 using Channels = data_feed::Channels;
