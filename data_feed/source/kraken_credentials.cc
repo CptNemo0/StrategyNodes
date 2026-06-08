@@ -1,7 +1,5 @@
 #include "kraken_credentials.h"
 
-#include <processenv.h>
-
 #include <format>
 #include <memory>
 #include <optional>
@@ -21,8 +19,9 @@ KrakenCredentials::KrakenCredentials(std::string public_key,
       private_key_(std::move(private_key)) {}
 
 std::unique_ptr<KrakenCredentials> KrakenCredentials::FromEnvironment() {
-  auto throw_if_empty = [](std::string_view) static -> std::string {
-    if (auto [name, value] = DF_GetEnvironmentVariable(kKrakenApiKeyVarName)) {
+  auto throw_if_empty =
+      [](std::string_view variable_name) static -> std::string {
+    if (auto [name, value] = DF_GetEnvironmentVariable(variable_name)) {
       return std::move(value.value());
     } else {
       throw std::runtime_error(
