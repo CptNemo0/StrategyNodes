@@ -2,6 +2,7 @@
 .zed/
 .claude/
 build/
+third_party/vcpkg_installed/
 BUILD_COMMANDS.md
 codebook.toml
 compile_commands.json
