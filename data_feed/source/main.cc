@@ -1,6 +1,5 @@
 #include <exception>
 #include <experimental/memory>
-#include <iostream>
 #include <memory>
 #include <print>
 
@@ -16,7 +15,7 @@ int main() {
     std::unique_ptr<data_feed::KrakenWebsocketToken> ptr =
         signer.GenerateToken();
   } catch (const std::exception& e) {
-    std::cerr << "Fatal: " << e.what() << "\n";
+    std::println("Fatal: {}", e.what());
     return 1;
   }
 
