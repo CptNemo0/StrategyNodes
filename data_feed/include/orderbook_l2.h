@@ -1,21 +1,17 @@
 #ifndef DATA_FEED_ORDERBOOK_L2_H_
 #define DATA_FEED_ORDERBOOK_L2_H_
 
-#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <flat_map>
 #include <format>
 #include <functional>
 #include <limits>
-#include <map>
 #include <print>
 #include <ranges>
-#include <span>
 #include <sstream>
 #include <string>
 #include <string_view>
-#include <vector>
 
 #include "aliasing.h"
 
