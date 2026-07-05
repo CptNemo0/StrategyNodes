@@ -18,6 +18,9 @@ inline constexpr std::string_view kKrakenRestEndpoint = "api.kraken.com";
 inline constexpr std::string_view kKrakenTokenEndpoint =
     "/0/private/GetWebSocketsToken";
 
+inline constexpr std::string_view kKrakenWsL3Endpoint =
+    "wss://ws-l3.kraken.com/v2";
+
 constexpr std::string_view kKrakenHttpsPort = "443";
 
 // 15 minutes
