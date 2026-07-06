@@ -19,11 +19,13 @@
 #include <boost/beast/websocket/ssl.hpp>
 #include <boost/beast/websocket/stream.hpp>
 #include <charconv>
+#include <chrono>
 #include <cstdlib>
 #include <exception>
 #include <format>
 #include <memory>
 #include <print>
+#include <queue>
 #include <ranges>
 #include <stdexcept>
 #include <string>
@@ -59,11 +61,36 @@ i64 double_string_to_i64(std::string_view value) {
   return return_value / 10;
 }
 
+class MovingAverage {
+ public:
+  explicit MovingAverage(u64 momentum) : momentum_{momentum} {}
+
+  double Next(u64 record) {
+    data_.push(record);
+    current_sum_ += record;
+
+    if (data_.size() > momentum_) {
+      current_sum_ -= data_.front();
+      data_.pop();
+    }
+
+    return current_sum_ / static_cast<double>(momentum_);
+  }
+
+ private:
+  u64 momentum_;
+  u64 current_sum_;
+  std::queue<u64> data_;
+};
+
 int main() {
   namespace beast = boost::beast;
   namespace websocket = beast::websocket;
   namespace ssl = boost::asio::ssl;
   using tcp = boost::asio::ip::tcp;
+
+  MovingAverage time_average{100uz};
+  auto previous = std::chrono::high_resolution_clock::now();
 
   try {
     std::unique_ptr<data_feed::OrderbookL2> orderbook{
@@ -113,9 +140,11 @@ int main() {
                 double_string_to_i64(json[i]["price"].GetString()),
                 double_string_to_i64(json[i]["qty"].GetString())};
 
-            orderbook->AddRecord(record, side);
+            orderbook->UpdatePriceLevel(record, side);
           }
         };
+
+    rapidjson::Document document;
 
     while (true) {
       buffer.clear();
@@ -123,12 +152,9 @@ int main() {
 
       const std::string json =
           std::move(beast::buffers_to_string(buffer.data()));
-
-      rapidjson::Document document;
       document.Parse<rapidjson::kParseNumbersAsStringsFlag>(json.c_str());
 
-      if (document["channel"] != "book" || document["type"] != "update" ||
-          document["channel"] != "snapshot") {
+      if (document["channel"] != "book") {
         continue;
       }
 
@@ -139,14 +165,24 @@ int main() {
 
       const std::string& checksum_json =
           document["data"][0]["checksum"].GetString();
-      i64 checksum{};
+      u32 checksum{};
       std::from_chars(checksum_json.data(),
                       checksum_json.data() + checksum_json.size(), checksum);
-      if (checksum != static_cast<i64>(orderbook->CalculateChecksum())) {
+      if (checksum != orderbook->CalculateChecksum()) {
         throw std::runtime_error{"Checksums do not match!"};
       }
 
+      const auto now = std::chrono::high_resolution_clock::now();
+
       system("CLS");
+
+      std::println("{}",
+                   time_average.Next(
+                       std::chrono::duration_cast<std::chrono::microseconds>(
+                           now - previous)
+                           .count()));
+
+      previous = now;
       orderbook->Log();
     }
 

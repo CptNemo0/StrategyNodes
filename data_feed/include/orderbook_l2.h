@@ -1,17 +1,12 @@
 #ifndef DATA_FEED_ORDERBOOK_L2_H_
 #define DATA_FEED_ORDERBOOK_L2_H_
 
-#include <array>
-#include <cstddef>
 #include <flat_map>
 #include <format>
 #include <functional>
 #include <limits>
-#include <print>
-#include <ranges>
-#include <sstream>
 #include <string>
-#include <string_view>
+#include <vector>
 
 #include "aliasing.h"
 
@@ -26,14 +21,13 @@ struct Level2Record {
     return std::format("{:>13.8f} @ {:>7.1f}", quantity / 100000000.0,
                        price / 10.0);
   }
+
+  double price_double() const { return static_cast<double>(price); }
+
+  double quantity_double() const { return static_cast<double>(quantity); }
 };
 
-// template <typename ComparsionOperator>
-// struct Level2RecordPriceComparer {
-//   static bool operator()(const Level2Record& lhs, const Level2Record& rhs) {
-//     return ComparsionOperator{}(lhs.price < rhs.price);
-//   }
-// };
+using Level2Records = std::vector<Level2Record>;
 
 class OrderbookL2 {
  public:
@@ -41,111 +35,26 @@ class OrderbookL2 {
 
   explicit OrderbookL2(u64 depth) : depth_(depth) {}
 
-  i64 BidPrice() const {
+  const Level2Records& buy_side() const { return buy_side_.values(); }
+
+  const Level2Records& sell_side() const { return sell_side_.values(); }
+
+  i64 bid_price() const {
     return buy_side_.size() > 0 ? buy_side_.begin()->second.price : 0;
   }
 
-  i64 AskPrice() const {
+  i64 ask_price() const {
     return buy_side_.size() > 0 ? buy_side_.rbegin()->second.price
                                 : std::numeric_limits<i64>::max();
   }
 
-  void AddRecord(const Level2Record& record, OrderbookSide side) {
-    Side& records = GetSideRecords(side);
-    auto iterator = records.find(record.price);
-    const bool price_level_exists = iterator != records.end();
+  void UpdatePriceLevel(const Level2Record& record, OrderbookSide side);
 
-    // A quantity equal to zero signals that a corresponding
-    // price level should be erased.
-    if (record.quantity == 0 && price_level_exists) {
-      records.erase(iterator);
-      return;
-    }
+  u32 CalculateChecksum() const;
 
-    if (price_level_exists) {
-      // The specified price level exists, thus update the quantity at that
-      // level.
-      iterator->second.quantity = record.quantity;
-      return;
-    }
-
-    // The specified price level does not exist, thus it needs to be inserted.
-    records.insert({record.price, record});
-
-    // If the number of price levels does not exceed the max depth of the
-    // orderbook return to the caller, otherwise remove the worst price level
-    // from the orderbook.
-    if (records.size() <= depth_) {
-      return;
-    }
-
-    if (side == OrderbookSide::kBuy) {
-      records.erase(records.rbegin()->second.price);
-    } else {
-      records.erase(records.begin());
-    }
-  };
-
-  // https://docs.kraken.com/exchange/guides/websockets/book-checksum-v2
-  u32 CalculateChecksum() const {
-    constexpr std::ptrdiff_t kChecksumDepth = 10;
-
-    auto append_level = [](std::string& buffer, const Level2Record& level) {
-      buffer += std::to_string(level.price);
-      buffer += std::to_string(level.quantity);
-    };
-
-    std::string buffer;
-    for (const auto& [price, level] :
-         sell_side_ | std::views::reverse | std::views::take(kChecksumDepth)) {
-      append_level(buffer, level);
-    }
-    for (const auto& [price, level] :
-         buy_side_ | std::views::take(kChecksumDepth)) {
-      append_level(buffer, level);
-    }
-
-    return Crc32(buffer);
-  }
-
-  void Log() const {
-    std::stringstream ss;
-    ss << "========= BUY SIDE =========\n";
-    for (const auto& [price, level] : buy_side_) {
-      ss << level.to_string() << "\n";
-    }
-
-    ss << "========= SELL SIDE ========\n";
-    for (const auto& [price, level] : sell_side_) {
-      ss << level.to_string() << "\n";
-    }
-
-    std::println("{}", ss.str());
-  }
+  void Log() const;
 
  private:
-  static constexpr std::array<u32, 256> BuildCrc32Table() {
-    std::array<u32, 256> table{};
-    for (u32 value{}; value < table.size(); ++value) {
-      u32 crc = value;
-      for (u32 bit{}; bit < 8; ++bit) {
-        crc = (crc & 1) != 0 ? (crc >> 1) ^ 0xEDB88320u : crc >> 1;
-      }
-      table[value] = crc;
-    }
-    return table;
-  }
-
-  static u32 Crc32(std::string_view data) {
-    static constexpr std::array<u32, 256> kTable = BuildCrc32Table();
-
-    u32 crc = 0xFFFFFFFFu;
-    for (const unsigned char byte : data) {
-      crc = kTable[(crc ^ byte) & 0xFFu] ^ (crc >> 8);
-    }
-    return crc ^ 0xFFFFFFFFu;
-  }
-
   Side& GetSideRecords(OrderbookSide side) {
     if (side == OrderbookSide::kBuy) {
       return buy_side_;
@@ -154,7 +63,7 @@ class OrderbookL2 {
     }
   }
 
-  u64 depth_{std::numeric_limits<u64>::max()};
+  u64 depth_;
   Side buy_side_;
   Side sell_side_;
 };

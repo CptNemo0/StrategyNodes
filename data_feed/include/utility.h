@@ -5,6 +5,8 @@
 #include <string>
 #include <string_view>
 
+#include "aliasing.h"
+
 namespace data_feed {
 
 struct EnvironmentVarNameValue {
@@ -15,6 +17,8 @@ struct EnvironmentVarNameValue {
 };
 
 EnvironmentVarNameValue DF_GetEnvironmentVariable(std::string_view name);
+
+u32 Crc32(std::string_view data);
 
 }  // namespace data_feed
 
