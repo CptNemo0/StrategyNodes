@@ -28,6 +28,10 @@ inline constexpr double kKrakenWebsocketTokenExpirationTime = 15;
 
 constexpr std::string_view kContentTypeJson = "application/json";
 
+constexpr std::string_view kKrakenWsL2Host = "ws.kraken.com";
+
+constexpr std::string_view kKrakenWsL2Target = "/v2";
+
 }  // namespace data_feed
 
 #endif  // ! DATA_FEED_CONSTANTS_H_

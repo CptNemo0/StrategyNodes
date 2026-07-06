@@ -42,14 +42,13 @@
 
 namespace {
 
-constexpr std::string_view kKrakenWsL3Host = "ws.kraken.com";
-constexpr std::string_view kKrakenWsL3Target = "/v2";
-
 std::string BuildLevel3SubscribeMessage(std::string_view token) {
   return R"({"method":"subscribe","params":{"channel":"book", "depth":10, "symbol":["BTC/USD"]}})";
 }
 
 }  // namespace
+
+class DataFeedL2 {};
 
 i64 double_string_to_i64(std::string_view value) {
   i64 return_value{0};
@@ -117,11 +116,11 @@ int main() {
     }
 
     beast::get_lowest_layer(ws).connect(
-        resolver.resolve(kKrakenWsL3Host, data_feed::kKrakenHttpsPort));
+        resolver.resolve(kKrakenWsL2Host, data_feed::kKrakenHttpsPort));
     ws.next_layer().handshake(ssl::stream_base::client);
-    ws.handshake(kKrakenWsL3Host, kKrakenWsL3Target);
+    ws.handshake(kKrakenWsL2Host, kKrakenWsL2Target);
 
-    std::println("Sending to {}{}:\n{}", kKrakenWsL3Host, kKrakenWsL3Target,
+    std::println("Sending to {}{}:\n{}", kKrakenWsL2Host, kKrakenWsL2Target,
                  subscribe_message);
     ws.write(boost::asio::buffer(subscribe_message));
 
