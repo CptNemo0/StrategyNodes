@@ -5,6 +5,7 @@
 #include <array>
 #include <cstdlib>
 #include <optional>
+#include <ranges>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -56,6 +57,16 @@ u32 Crc32(std::string_view data) {
     crc = kTable[(crc ^ byte) & 0xFFu] ^ (crc >> 8);
   }
   return crc ^ 0xFFFFFFFFu;
+}
+
+i64 double_string_to_i64(std::string_view value) {
+  i64 return_value{0};
+  for (char digit : value | std::ranges::views::filter(
+                                [](char c) { return c >= '0' && c <= '9'; })) {
+    return_value += digit - '0';
+    return_value *= 10;
+  }
+  return return_value / 10;
 }
 
 }  // namespace data_feed

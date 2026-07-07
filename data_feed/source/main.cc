@@ -21,6 +21,7 @@
 #include <charconv>
 #include <chrono>
 #include <cstdlib>
+#include <deque>
 #include <exception>
 #include <format>
 #include <memory>
@@ -39,26 +40,15 @@
 #include "kraken_websocket_token_generator.h"
 #include "orderbook_l2.h"
 #include "tls_context.h"
+#include "utility.h"
 
 namespace {
 
-std::string BuildLevel3SubscribeMessage(std::string_view token) {
+std::string BuildLevel2SubscribeMessage(std::string_view token) {
   return R"({"method":"subscribe","params":{"channel":"book", "depth":10, "symbol":["BTC/USD"]}})";
 }
 
 }  // namespace
-
-class DataFeedL2 {};
-
-i64 double_string_to_i64(std::string_view value) {
-  i64 return_value{0};
-  for (char digit : value | std::ranges::views::filter(
-                                [](char c) { return c >= '0' && c <= '9'; })) {
-    return_value += digit - '0';
-    return_value *= 10;
-  }
-  return return_value / 10;
-}
 
 class MovingAverage {
  public:
@@ -82,6 +72,8 @@ class MovingAverage {
   std::queue<u64> data_;
 };
 
+class DataFeedL2 {};
+
 int main() {
   namespace beast = boost::beast;
   namespace websocket = beast::websocket;
@@ -102,7 +94,7 @@ int main() {
         signer.GenerateToken();
 
     const std::string subscribe_message =
-        BuildLevel3SubscribeMessage(token->get());
+        BuildLevel2SubscribeMessage(token->get());
 
     data_feed::TlsContext tls;
     boost::asio::io_context ioc;
@@ -111,17 +103,17 @@ int main() {
     tcp::resolver resolver{ioc};
 
     if (SSL_set_tlsext_host_name(ws.next_layer().native_handle(),
-                                 kKrakenWsL3Host.data()) != 1) {
+                                 data_feed::kKrakenWsL2Host.data()) != 1) {
       throw std::runtime_error("Failed to set TLS SNI hostname");
     }
 
-    beast::get_lowest_layer(ws).connect(
-        resolver.resolve(kKrakenWsL2Host, data_feed::kKrakenHttpsPort));
+    beast::get_lowest_layer(ws).connect(resolver.resolve(
+        data_feed::kKrakenWsL2Host, data_feed::kKrakenHttpsPort));
     ws.next_layer().handshake(ssl::stream_base::client);
-    ws.handshake(kKrakenWsL2Host, kKrakenWsL2Target);
+    ws.handshake(data_feed::kKrakenWsL2Host, data_feed::kKrakenWsL2Target);
 
-    std::println("Sending to {}{}:\n{}", kKrakenWsL2Host, kKrakenWsL2Target,
-                 subscribe_message);
+    std::println("Sending to {}{}:\n{}", data_feed::kKrakenWsL2Host,
+                 data_feed::kKrakenWsL2Target, subscribe_message);
     ws.write(boost::asio::buffer(subscribe_message));
 
     beast::flat_buffer buffer;
@@ -136,8 +128,8 @@ int main() {
            const rapidjson::GenericValue<rapidjson::UTF8<>>& json) static {
           for (decltype(json.Size()) i{}; i < json.Size(); ++i) {
             data_feed::Level2Record record{
-                double_string_to_i64(json[i]["price"].GetString()),
-                double_string_to_i64(json[i]["qty"].GetString())};
+                data_feed::double_string_to_i64(json[i]["price"].GetString()),
+                data_feed::double_string_to_i64(json[i]["qty"].GetString())};
 
             orderbook->UpdatePriceLevel(record, side);
           }

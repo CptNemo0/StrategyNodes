@@ -26,11 +26,11 @@ constexpr std::string_view kKrakenHttpsPort = "443";
 // 15 minutes
 inline constexpr double kKrakenWebsocketTokenExpirationTime = 15;
 
-constexpr std::string_view kContentTypeJson = "application/json";
+inline constexpr std::string_view kContentTypeJson = "application/json";
 
-constexpr std::string_view kKrakenWsL2Host = "ws.kraken.com";
+inline constexpr std::string_view kKrakenWsL2Host = "ws.kraken.com";
 
-constexpr std::string_view kKrakenWsL2Target = "/v2";
+inline constexpr std::string_view kKrakenWsL2Target = "/v2";
 
 }  // namespace data_feed
 
