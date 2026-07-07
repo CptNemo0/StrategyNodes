@@ -1,0 +1,33 @@
+{
+  "name": "frontend",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "proto:gen": "buf generate ../proto",
+    "mock:feed": "tsx scripts/mock_feed.ts"
+  },
+  "dependencies": {
+    "@bufbuild/protobuf": "^2.6.0",
+    "@xyflow/react": "^12.6.0",
+    "lightweight-charts": "^5.0.7",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "uplot": "^1.6.31"
+  },
+  "devDependencies": {
+    "@bufbuild/buf": "^1.55.0",
+    "@bufbuild/protoc-gen-es": "^2.6.0",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "@types/ws": "^8.18.0",
+    "@vitejs/plugin-react": "^4.5.0",
+    "tsx": "^4.19.0",
+    "typescript": "~5.8.3",
+    "vite": "^6.3.5",
+    "ws": "^8.18.0"
+  }
+}

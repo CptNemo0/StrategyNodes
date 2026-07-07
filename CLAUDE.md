@@ -33,6 +33,8 @@ Key linting rules enforced: `bugprone-*`, `google-*`, `modernize-*`, `readabilit
 The project is structured around trading concerns as separate top-level directories:
 
 - `data_feed/` — market data ingestion from Kraken (currently a stub)
+- `frontend/` — TypeScript/React node-graph strategy editor (Vite, React Flow); displays data streamed from C++ over WebSocket (see `frontend/README.md`)
+- `proto/` — protobuf definitions shared between C++ and the frontend; regenerate TS bindings with `npm run proto:gen` in `frontend/`
 
 Each module is expected to grow its own sources within its directory.
 

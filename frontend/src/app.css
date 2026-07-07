@@ -1,0 +1,92 @@
+:root {
+  color-scheme: dark;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  background: #16181d;
+  color: #d6d9e0;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+#root,
+.app-layout {
+  height: 100vh;
+}
+
+.app-layout {
+  display: flex;
+}
+
+.graph-pane {
+  flex: 1;
+  min-width: 0;
+}
+
+.side-pane {
+  width: 300px;
+  border-left: 1px solid #2b2f3a;
+  background: #1b1e25;
+  padding: 16px;
+}
+
+.ticker-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.ticker-header h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.feed-status {
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.feed-status--open {
+  color: #4caf7d;
+}
+
+.feed-status--connecting {
+  color: #e0b341;
+}
+
+.feed-status--closed {
+  color: #e05d5d;
+}
+
+.ticker-waiting {
+  color: #7a8194;
+}
+
+.ticker-fields {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px 16px;
+  margin: 16px 0 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.ticker-fields dt {
+  color: #7a8194;
+}
+
+.ticker-fields dd {
+  margin: 0;
+  text-align: right;
+}
+
+.ticker-bid {
+  color: #4caf7d;
+}
+
+.ticker-ask {
+  color: #e05d5d;
+}
