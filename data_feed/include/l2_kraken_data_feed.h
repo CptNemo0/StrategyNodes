@@ -14,31 +14,22 @@
 #include "aliasing.h"
 #include "kraken_websocket_token.h"
 #include "kraken_websocket_token_generator.h"
-#include "orderbook_l2.h"
+#include "l2_update.h"
 #include "tls_context.h"
 
 namespace data_feed {
 
-// A single "book" channel message split per side. checksum is Kraken's CRC32
-// over the top levels, to be compared against the local book after the update
-// has been applied.
-struct Level2Update {
-  Level2Records bids;
-  Level2Records asks;
-  u32 checksum{};
-};
-
 // Owns the TLS websocket connection to Kraken's L2 "book" channel and turns
 // raw JSON frames into Level2Updates. The token generator (and the
 // credentials behind it) is an external entity that must outlive this object.
-class KrakenDataFeedL2 {
+class Level2KrakenDataFeed {
  public:
-  KrakenDataFeedL2(const KrakenWebsocketTokenGenerator& signer,
-                   u64 depth,
-                   std::string symbol);
+  Level2KrakenDataFeed(const KrakenWebsocketTokenGenerator& signer,
+                       u64 depth,
+                       std::string symbol);
 
-  KrakenDataFeedL2(const KrakenDataFeedL2&) = delete;
-  KrakenDataFeedL2& operator=(const KrakenDataFeedL2&) = delete;
+  Level2KrakenDataFeed(const Level2KrakenDataFeed&) = delete;
+  Level2KrakenDataFeed& operator=(const Level2KrakenDataFeed&) = delete;
 
   // Resolves the host, performs the TLS and websocket handshakes and
   // subscribes to the book channel; consumes the status and

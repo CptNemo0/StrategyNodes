@@ -1,7 +1,10 @@
 import { fromBinary } from "@bufbuild/protobuf";
 import { useEffect, useState } from "react";
 
-import { type BookTicker, MarketDataEventSchema } from "../gen/market_data_pb.ts";
+import {
+  type BookTicker,
+  MarketDataEventSchema,
+} from "../gen/market_data_pb.ts";
 
 export type FeedStatus = "connecting" | "open" | "closed";
 
@@ -37,6 +40,7 @@ export function useMarketFeed(url: string): MarketFeed {
           new Uint8Array(message.data),
         );
         if (event.payload.case === "bookTicker") {
+          console.log(event.payload.value);
           setTicker(event.payload.value);
         }
       };

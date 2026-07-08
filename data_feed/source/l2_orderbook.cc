@@ -1,4 +1,4 @@
-#include "orderbook_l2.h"
+#include "l2_orderbook.h"
 
 #include <cstddef>
 #include <print>
@@ -6,12 +6,15 @@
 #include <sstream>
 
 #include "aliasing.h"
+#include "l2_record.h"
+#include "l2_update.h"
+#include "orderbook_sides.h"
 #include "utility.h"
 
 namespace data_feed {
 
-void OrderbookL2::UpdatePriceLevel(const Level2Record& record,
-                                   OrderbookSide side) {
+void Level2Orderbook::UpdatePriceLevel(const Level2Record& record,
+                                       OrderbookSides side) {
   Side& records = GetSideRecords(side);
   auto iterator = records.find(record.price);
   const bool price_level_exists = iterator != records.end();
@@ -40,14 +43,26 @@ void OrderbookL2::UpdatePriceLevel(const Level2Record& record,
     return;
   }
 
-  if (side == OrderbookSide::kBuy) {
+  if (side == OrderbookSides::kBuy) {
     records.erase(records.rbegin()->second.price);
   } else {
     records.erase(records.begin());
   }
 };
 
-u32 OrderbookL2::CalculateChecksum() const {
+void Level2Orderbook::ConsumeUpdate(const Level2Update& update) {
+  auto apply_side = [this](const data_feed::Level2Records& records,
+                           data_feed::OrderbookSides side) {
+    for (const data_feed::Level2Record& record : records) {
+      this->UpdatePriceLevel(record, side);
+    }
+  };
+
+  apply_side(update.bids, data_feed::OrderbookSides::kBuy);
+  apply_side(update.asks, data_feed::OrderbookSides::kSell);
+}
+
+u32 Level2Orderbook::CalculateChecksum() const {
   constexpr std::ptrdiff_t kChecksumDepth = 10;
 
   auto append_level = [](std::stringstream& buffer,
@@ -70,7 +85,7 @@ u32 OrderbookL2::CalculateChecksum() const {
   return Crc32(buffer.str());
 }
 
-void OrderbookL2::Log() const {
+void Level2Orderbook::Log() const {
   std::stringstream ss;
   ss << "========= BUY SIDE =========\n";
   for (const auto& [price, level] : buy_side_) {
@@ -78,7 +93,7 @@ void OrderbookL2::Log() const {
   }
 
   ss << "========= SELL SIDE ========\n";
-  for (const auto& [price, level] : sell_side_) {
+  for (const auto& [price, level] : sell_side_ | std::ranges::views::reverse) {
     ss << level.to_string() << "\n";
   }
 

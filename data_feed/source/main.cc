@@ -9,15 +9,41 @@
 #include <string_view>
 
 #include "aliasing.h"
+#include "constants.h"
 #include "kraken_credentials.h"
-#include "kraken_data_feed_l2.h"
 #include "kraken_websocket_token_generator.h"
-#include "orderbook_l2.h"
+#include "l2_kraken_data_feed.h"
+#include "l2_orderbook.h"
+#include "l2_record.h"
+#include "l2_update.h"
+#include "market_data.pb.h"
+#include "websocket_broadcast_server.h"
 
 namespace {
 
 constexpr u64 kBookDepth = 10;
 constexpr std::string_view kBookSymbol = "BTC/USD";
+
+// BTC/USD precision on Kraken: 1 price decimal, 8 quantity decimals. This is
+// how double_string_to_i64 packs the decimal strings into Level2Record ints.
+constexpr double kPriceScale = 10.0;
+constexpr double kQuantityScale = 1e8;
+
+std::string BuildBookTickerFrame(const data_feed::Level2Record& bid,
+                                 const data_feed::Level2Record& ask) {
+  trading::market_data::v1::MarketDataEvent event;
+  trading::market_data::v1::BookTicker& ticker = *event.mutable_book_ticker();
+  ticker.set_symbol(std::string{kBookSymbol});
+  ticker.set_bid_price(static_cast<double>(bid.price) / kPriceScale);
+  ticker.set_bid_qty(static_cast<double>(bid.quantity) / kQuantityScale);
+  ticker.set_ask_price(static_cast<double>(ask.price) / kPriceScale);
+  ticker.set_ask_qty(static_cast<double>(ask.quantity) / kQuantityScale);
+  ticker.set_timestamp_ns(
+      static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                           std::chrono::system_clock::now().time_since_epoch())
+                           .count()));
+  return event.SerializeAsString();
+}
 
 }  // namespace
 
@@ -44,36 +70,35 @@ class MovingAverage {
 };
 
 int main() {
-  MovingAverage time_average{100uz};
+  MovingAverage time_average{20uz};
   std::chrono::high_resolution_clock::time_point previous =
       std::chrono::high_resolution_clock::now();
 
   try {
-    data_feed::OrderbookL2 orderbook{kBookDepth};
+    data_feed::WebsocketBroadcastServer frontend_stream{
+        data_feed::kFrontendStreamPort};
+    data_feed::Level2Orderbook orderbook{kBookDepth};
 
     std::unique_ptr<data_feed::KrakenCredentials> credentials =
         data_feed::KrakenCredentials::FromEnvironment();
     data_feed::KrakenWebsocketTokenGenerator signer{*credentials};
 
-    data_feed::KrakenDataFeedL2 feed{signer, kBookDepth,
-                                     std::string{kBookSymbol}};
+    data_feed::Level2KrakenDataFeed feed{signer, kBookDepth,
+                                         std::string{kBookSymbol}};
     feed.Connect();
-
-    auto apply_side = [&orderbook](const data_feed::Level2Records& records,
-                                   data_feed::OrderbookSide side) {
-      for (const data_feed::Level2Record& record : records) {
-        orderbook.UpdatePriceLevel(record, side);
-      }
-    };
 
     while (true) {
       const data_feed::Level2Update update = feed.Next();
 
-      apply_side(update.bids, data_feed::OrderbookSide::kBuy);
-      apply_side(update.asks, data_feed::OrderbookSide::kSell);
+      orderbook.ConsumeUpdate(update);
 
       if (update.checksum != orderbook.CalculateChecksum()) {
         throw std::runtime_error{"Checksums do not match!"};
+      }
+
+      if (!orderbook.buy_side().empty() && !orderbook.sell_side().empty()) {
+        frontend_stream.Broadcast(
+            BuildBookTickerFrame(orderbook.best_bid(), orderbook.best_ask()));
       }
 
       const std::chrono::high_resolution_clock::time_point now =

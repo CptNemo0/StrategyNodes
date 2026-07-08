@@ -2,6 +2,7 @@
 .zed/
 .claude/
 build/
+proto_gen/
 third_party/vcpkg_installed/
 BUILD_COMMANDS.md
 codebook.toml

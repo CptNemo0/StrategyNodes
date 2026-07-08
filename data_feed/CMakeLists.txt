@@ -18,6 +18,7 @@ project(data_feed CXX)
 
 find_package(Boost REQUIRED CONFIG COMPONENTS system)
 find_package(OpenSSL REQUIRED)
+find_package(protobuf CONFIG REQUIRED)
 
 add_executable(${PROJECT_NAME})
 target_include_directories(${PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_LIST_DIR}/include)
@@ -26,14 +27,25 @@ target_sources(${PROJECT_NAME} PRIVATE ${PROJECT_HEADERS} ${PROJECT_SOURCES})
 target_include_directories(${PROJECT_NAME} SYSTEM PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/../third_party)
 
+set(PROTO_GEN_DIR ${CMAKE_CURRENT_LIST_DIR}/../proto_gen)
+file(MAKE_DIRECTORY ${PROTO_GEN_DIR})
+protobuf_generate(
+    TARGET ${PROJECT_NAME}
+    PROTOS ${CMAKE_CURRENT_LIST_DIR}/../proto/market_data.proto
+    IMPORT_DIRS ${CMAKE_CURRENT_LIST_DIR}/../proto
+    PROTOC_OUT_DIR ${PROTO_GEN_DIR})
+target_include_directories(${PROJECT_NAME} SYSTEM PRIVATE ${PROTO_GEN_DIR})
+
 target_link_libraries(${PROJECT_NAME} PRIVATE
     Boost::system
     OpenSSL::SSL
-    OpenSSL::Crypto)
+    OpenSSL::Crypto
+    protobuf::libprotobuf)
 
 if(WIN32)
   target_link_libraries(${PROJECT_NAME} PRIVATE ws2_32 mswsock crypt32)
   target_compile_definitions(${PROJECT_NAME} PRIVATE _WIN32_WINNT=0x0A00)
+  target_compile_options(${PROJECT_NAME} PRIVATE "-Wa,-mbig-obj")
 endif()
 
 # GCC keeps the C++23 <print> terminal helpers (std::__open_terminal,

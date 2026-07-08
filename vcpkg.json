@@ -1,5 +1,25 @@
 {
   "name": "trading-system",
   "version-string": "0.1.0",
-  "dependencies": ["boost-beast", "openssl"]
+  "$comment": "builtin-baseline freezes the entire transitive dependency graph to one vcpkg registry commit, so nothing updates unless this hash changes. The overrides below additionally hard-pin every direct dependency to its exact installed version, immune even to a baseline bump.",
+  "builtin-baseline": "495848814af4cc2760e70f7440c2dbe66d3ff196",
+  "dependencies": ["boost-beast", "openssl", "protobuf"],
+  "overrides": [
+    {
+      "name": "boost-beast",
+      "version": "1.91.0",
+      "port-version": 0
+    },
+    {
+      "name": "openssl",
+      "version": "3.6.2",
+      "port-version": 0
+    },
+    {
+      "$reason": "protobuf >= v22 bundles upb, whose vsnprintf_compat.h calls the MSVC-only _vsnprintf_s and fails to link with MinGW. 3.21.12 is the last pre-abseil/pre-upb release.",
+      "name": "protobuf",
+      "version": "3.21.12",
+      "port-version": 4
+    }
+  ]
 }

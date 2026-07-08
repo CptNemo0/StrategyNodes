@@ -1,5 +1,3 @@
-#include "kraken_data_feed_l2.h"
-
 #include <openssl/tls1.h>
 #include <rapidjson/document.h>
 #include <rapidjson/encodings.h>
@@ -26,7 +24,9 @@
 #include "aliasing.h"
 #include "constants.h"
 #include "kraken_websocket_token_generator.h"
-#include "orderbook_l2.h"
+#include "l2_kraken_data_feed.h"
+#include "l2_record.h"
+#include "l2_update.h"
 #include "utility.h"
 
 namespace data_feed {
@@ -61,15 +61,16 @@ u32 ParseChecksum(std::string_view checksum) {
 
 }  // namespace
 
-KrakenDataFeedL2::KrakenDataFeedL2(const KrakenWebsocketTokenGenerator& signer,
-                                   u64 depth,
-                                   std::string symbol)
+Level2KrakenDataFeed::Level2KrakenDataFeed(
+    const KrakenWebsocketTokenGenerator& signer,
+    u64 depth,
+    std::string symbol)
     : signer_{signer},
       depth_{depth},
       symbol_{std::move(symbol)},
       ws_{ioc_, tls_.native()} {}
 
-void KrakenDataFeedL2::Connect() {
+void Level2KrakenDataFeed::Connect() {
   token_ = signer_.GenerateToken();
 
   if (SSL_set_tlsext_host_name(ws_.next_layer().native_handle(),
@@ -99,12 +100,13 @@ void KrakenDataFeedL2::Connect() {
   ws_.read(buffer_);
 }
 
-Level2Update KrakenDataFeedL2::Next() {
+Level2Update Level2KrakenDataFeed::Next() {
   while (true) {
     buffer_.clear();
     ws_.read(buffer_);
 
-    const std::string json = boost::beast::buffers_to_string(buffer_.data());
+    const std::string json{
+        std::move(boost::beast::buffers_to_string(buffer_.data()))};
     document_.Parse<rapidjson::kParseNumbersAsStringsFlag>(json.c_str());
 
     if (document_["channel"] != "book") {
@@ -120,7 +122,7 @@ Level2Update KrakenDataFeedL2::Next() {
   }
 }
 
-void KrakenDataFeedL2::Close() {
+void Level2KrakenDataFeed::Close() {
   boost::beast::error_code ec;
   ws_.close(boost::beast::websocket::close_code::normal, ec);
 }

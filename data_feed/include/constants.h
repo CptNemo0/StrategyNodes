@@ -1,7 +1,10 @@
 #ifndef DATA_FEED_CONSTANTS_H_
 #define DATA_FEED_CONSTANTS_H_
 
+#include <cstddef>
 #include <string_view>
+
+#include "aliasing.h"
 
 namespace data_feed {
 
@@ -31,6 +34,12 @@ inline constexpr std::string_view kContentTypeJson = "application/json";
 inline constexpr std::string_view kKrakenWsL2Host = "ws.kraken.com";
 
 inline constexpr std::string_view kKrakenWsL2Target = "/v2";
+
+// Local websocket endpoint the TypeScript frontend subscribes to; must match
+// the default VITE_FEED_URL in frontend/src/App.tsx.
+inline constexpr u16 kFrontendStreamPort = 8765;
+
+constexpr std::size_t kMaxQueuedFrames = 256;
 
 }  // namespace data_feed
 
