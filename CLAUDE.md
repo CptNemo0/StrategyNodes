@@ -44,10 +44,11 @@ Each module is expected to grow its own sources within its directory.
 
 ## Additional coding tips
 
-- Use auto only for types declared within types. For example: std::vector<T>::borrowed_iterator.
+- Use auto only for internal types. For example: std::vector<T>::borrowed_iterator.
 
 - Never assign a temporary value (function output) to a const variable if it is ingested by only one function. Instead just call in a function call.
-  BAD
+
+BAD
 
 ```
 const int a = foo();
