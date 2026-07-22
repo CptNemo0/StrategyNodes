@@ -1,5 +1,5 @@
 #include <chrono>
-#include <cstdlib>
+#include <concepts>
 #include <exception>
 #include <memory>
 #include <print>
@@ -47,30 +47,7 @@ std::string BuildBookTickerFrame(const data_feed::Level2Record& bid,
 
 }  // namespace
 
-class MovingAverage {
- public:
-  explicit MovingAverage(u64 momentum) : momentum_{momentum} {}
-
-  double Next(u64 record) {
-    data_.push(record);
-    current_sum_ += record;
-
-    if (data_.size() > momentum_) {
-      current_sum_ -= data_.front();
-      data_.pop();
-    }
-
-    return current_sum_ / static_cast<double>(momentum_);
-  }
-
- private:
-  u64 momentum_;
-  u64 current_sum_{};
-  std::queue<u64> data_;
-};
-
 int main() {
-  MovingAverage time_average{20uz};
   std::chrono::high_resolution_clock::time_point previous =
       std::chrono::high_resolution_clock::now();
 
@@ -103,17 +80,7 @@ int main() {
 
       const std::chrono::high_resolution_clock::time_point now =
           std::chrono::high_resolution_clock::now();
-
-      system("CLS");
-
-      std::println("{}",
-                   time_average.Next(
-                       std::chrono::duration_cast<std::chrono::microseconds>(
-                           now - previous)
-                           .count()));
-
       previous = now;
-      orderbook.Log();
     }
   } catch (const std::exception& e) {
     std::println("Fatal: {}", e.what());

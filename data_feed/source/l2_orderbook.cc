@@ -72,13 +72,12 @@ u32 Level2Orderbook::CalculateChecksum() const {
   };
 
   std::stringstream buffer;
-  for (const auto& [price, level] :
+  for (const auto& [_, level] :
        sell_side_ | std::views::reverse | std::views::take(kChecksumDepth)) {
     append_level(buffer, level);
   }
 
-  for (const auto& [price, level] :
-       buy_side_ | std::views::take(kChecksumDepth)) {
+  for (const auto& [_, level] : buy_side_ | std::views::take(kChecksumDepth)) {
     append_level(buffer, level);
   }
 
