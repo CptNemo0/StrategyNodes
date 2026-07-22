@@ -1,5 +1,4 @@
 #include <chrono>
-#include <cstdlib>
 #include <exception>
 #include <memory>
 #include <print>
@@ -103,17 +102,7 @@ int main() {
 
       const std::chrono::high_resolution_clock::time_point now =
           std::chrono::high_resolution_clock::now();
-
-      system("CLS");
-
-      std::println("{}",
-                   time_average.Next(
-                       std::chrono::duration_cast<std::chrono::microseconds>(
-                           now - previous)
-                           .count()));
-
       previous = now;
-      orderbook.Log();
     }
   } catch (const std::exception& e) {
     std::println("Fatal: {}", e.what());

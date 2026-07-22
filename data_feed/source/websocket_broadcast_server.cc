@@ -49,6 +49,8 @@ void WebsocketBroadcastServer::Broadcast(std::string frame) {
   std::shared_ptr<const std::string> shared_frame{
       std::make_shared<const std::string>(std::move(frame))};
 
+  // std::println("{}", *shared_frame);
+
   // Returns true for each nullptr - a disconnected session. Sends payload and
   // returns false otherwise.
   auto send_if_alive = [shared_frame](const std::weak_ptr<Session>& weak) {
