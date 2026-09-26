@@ -1,8 +1,4 @@
 #include <openssl/tls1.h>
-#include <rapidjson/document.h>
-#include <rapidjson/encodings.h>
-#include <rapidjson/rapidjson.h>
-#include <rapidjson/reader.h>
 
 #include <boost/asio/buffer.hpp>
 #include <boost/asio/connect.hpp>
@@ -13,7 +9,6 @@
 #include <boost/beast/core/stream_traits.hpp>
 #include <boost/beast/websocket/rfc6455.hpp>
 #include <boost/beast/websocket/ssl.hpp>
-#include <charconv>
 #include <format>
 #include <print>
 #include <stdexcept>
@@ -25,38 +20,15 @@
 #include "constants.h"
 #include "kraken_websocket_token_generator.h"
 #include "l2_kraken_data_feed.h"
-#include "l2_record.h"
-#include "l2_update.h"
-#include "utility.h"
 
 namespace data_feed {
 
 namespace {
 
-using JsonValue = rapidjson::GenericValue<rapidjson::UTF8<>>;
-
 std::string BuildLevel2SubscribeMessage(u64 depth, std::string_view symbol) {
   return std::format(
       R"({{"method":"subscribe","params":{{"channel":"book","depth":{},"symbol":["{}"]}}}})",
       depth, symbol);
-}
-
-Level2Records ParseSide(const JsonValue& side) {
-  Level2Records records;
-  records.reserve(side.Size());
-
-  for (decltype(side.Size()) i{}; i < side.Size(); ++i) {
-    records.emplace_back(double_string_to_i64(side[i]["price"].GetString()),
-                         double_string_to_i64(side[i]["qty"].GetString()));
-  }
-
-  return records;
-}
-
-u32 ParseChecksum(std::string_view checksum) {
-  u32 value{};
-  std::from_chars(checksum.data(), checksum.data() + checksum.size(), value);
-  return value;
 }
 
 }  // namespace
@@ -100,26 +72,10 @@ void Level2KrakenDataFeed::Connect() {
   ws_.read(buffer_);
 }
 
-Level2Update Level2KrakenDataFeed::Next() {
-  while (true) {
-    buffer_.clear();
-    ws_.read(buffer_);
-
-    const std::string json{
-        std::move(boost::beast::buffers_to_string(buffer_.data()))};
-    document_.Parse<rapidjson::kParseNumbersAsStringsFlag>(json.c_str());
-
-    if (document_["channel"] != "book") {
-      continue;
-    }
-
-    const JsonValue& data = document_["data"][0];
-
-    return Level2Update{
-        .bids = ParseSide(data["bids"]),
-        .asks = ParseSide(data["asks"]),
-        .checksum = ParseChecksum(data["checksum"].GetString())};
-  }
+std::string Level2KrakenDataFeed::Next() {
+  buffer_.clear();
+  ws_.read(buffer_);
+  return boost::beast::buffers_to_string(buffer_.data());
 }
 
 void Level2KrakenDataFeed::Close() {

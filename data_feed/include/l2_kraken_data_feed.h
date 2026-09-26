@@ -1,8 +1,6 @@
 #ifndef DATA_FEED_KRAKEN_DATA_FEED_L2_H_
 #define DATA_FEED_KRAKEN_DATA_FEED_L2_H_
 
-#include <rapidjson/document.h>
-
 #include <boost/asio/io_context.hpp>
 #include <boost/beast/core/flat_buffer.hpp>
 #include <boost/beast/core/tcp_stream.hpp>
@@ -14,14 +12,14 @@
 #include "aliasing.h"
 #include "kraken_websocket_token.h"
 #include "kraken_websocket_token_generator.h"
-#include "l2_update.h"
 #include "tls_context.h"
 
 namespace data_feed {
 
-// Owns the TLS websocket connection to Kraken's L2 "book" channel and turns
-// raw JSON frames into Level2Updates. The token generator (and the
-// credentials behind it) is an external entity that must outlive this object.
+// Owns the TLS websocket connection to Kraken's L2 "book" channel and hands
+// out the raw JSON frames exactly as the venue sent them. The token generator
+// (and the credentials behind it) is an external entity that must outlive this
+// object.
 class Level2KrakenDataFeed {
  public:
   Level2KrakenDataFeed(const KrakenWebsocketTokenGenerator& signer,
@@ -36,9 +34,9 @@ class Level2KrakenDataFeed {
   // subscription-acknowledgement frames.
   void Connect();
 
-  // Blocks until the next "book" message arrives and returns it parsed.
-  // Frames from other channels (heartbeat etc.) are skipped.
-  Level2Update Next();
+  // Blocks until the next frame arrives and returns it verbatim. Frames from
+  // all channels (book, heartbeat, status etc.) are returned.
+  std::string Next();
 
   void Close();
 
@@ -54,7 +52,6 @@ class Level2KrakenDataFeed {
   boost::asio::io_context ioc_;
   WebsocketStream ws_;
   boost::beast::flat_buffer buffer_;
-  rapidjson::Document document_;
   std::unique_ptr<KrakenWebsocketToken> token_;
 };
 
