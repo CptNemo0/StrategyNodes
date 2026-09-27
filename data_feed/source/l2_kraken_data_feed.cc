@@ -1,3 +1,5 @@
+#include "l2_kraken_data_feed.h"
+
 #include <openssl/tls1.h>
 
 #include <boost/asio/buffer.hpp>
@@ -10,7 +12,6 @@
 #include <boost/beast/websocket/rfc6455.hpp>
 #include <boost/beast/websocket/ssl.hpp>
 #include <format>
-#include <print>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -18,8 +19,8 @@
 
 #include "aliasing.h"
 #include "constants.h"
+#include "kraken_message_size_util.h"
 #include "kraken_websocket_token_generator.h"
-#include "l2_kraken_data_feed.h"
 
 namespace data_feed {
 
@@ -40,7 +41,9 @@ Level2KrakenDataFeed::Level2KrakenDataFeed(
     : signer_{signer},
       depth_{depth},
       symbol_{std::move(symbol)},
-      ws_{ioc_, tls_.native()} {}
+      ws_{ioc_, tls_.native()} {
+  buffer_.reserve(MaxL2SnapshotLength(depth_, symbol_.size()));
+}
 
 void Level2KrakenDataFeed::Connect() {
   token_ = signer_.GenerateToken();
@@ -58,14 +61,11 @@ void Level2KrakenDataFeed::Connect() {
 
   const std::string subscribe_message =
       BuildLevel2SubscribeMessage(depth_, symbol_);
-  std::println("Sending to {}{}:\n{}", kKrakenWsL2Host, kKrakenWsL2Target,
-               subscribe_message);
+
   ws_.write(boost::asio::buffer(subscribe_message));
 
   buffer_.clear();
   ws_.read(buffer_);
-  std::println("Received:\n{}",
-               boost::beast::buffers_to_string(buffer_.data()));
 
   // Subscription acknowledgement.
   buffer_.clear();
