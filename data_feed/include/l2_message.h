@@ -3,6 +3,7 @@
 
 #include <cstddef>
 #include <span>
+#include <string>
 #include <vector>
 
 #include "aliasing.h"
@@ -30,6 +31,8 @@ struct L2Message {
   u64 Serialize(std::span<std::byte> out) const;
 
   Type type;
+  // Pair the message belongs to, e.g. "BTC/USD". Not serialized.
+  std::string symbol;
   std::vector<Level> buys;
   std::vector<Level> sells;
 };

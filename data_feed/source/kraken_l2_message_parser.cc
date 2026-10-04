@@ -44,6 +44,7 @@ std::optional<L2Message> ParseKrakenL2Message(std::string_view frame) {
   return L2Message{.type = document["type"] == "snapshot"
                                ? L2Message::Type::kSnapshot
                                : L2Message::Type::kUpdate,
+                   .symbol = data["symbol"].GetString(),
                    .buys = ParseSide(data["bids"]),
                    .sells = ParseSide(data["asks"])};
 }
