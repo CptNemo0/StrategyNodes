@@ -2,8 +2,8 @@
 
 A data acquisition pipeline for exchange orderbook data, written in C++23.
 
-Right now it does one thing: it connects to Kraken's L2 `book` channel and
-copies every message the venue sends, unchanged, into a text file.
+Right now it connects to Kraken's L2 `book` channel for a fixed set of pairs
+and records every message the venue sends into a per-pair binary file.
 
 ## Layout
 
@@ -11,29 +11,24 @@ copies every message the venue sends, unchanged, into a text file.
 - `example_scripts/` — standalone helper scripts (e.g. fetching a Kraken
   websocket token from Python).
 - `third_party/` — vendored headers (rapidjson) and the vcpkg install tree.
-- `_unused/` — gitignored holding area for parked code (orderbook, websocket
-  broadcast server, frontend, protobuf definitions). Not built.
 
 ## What it records
 
-The values are hardcoded in `data_feed/source/main.cc`:
+The pairs are hardcoded in `data_feed/source/main.cc`:
 
-| Setting   | Value                    |
-| --------- | ------------------------ |
-| Venue     | `wss://ws.kraken.com/v2` |
-| Channel   | `book`                   |
-| Symbol    | `BTC/USD`                |
-| Depth     | `10`                     |
-| Output    | `kraken_l2_messages.txt` |
+| Setting   | Value                        |
+| --------- | ---------------------------- |
+| Venue     | `wss://ws.kraken.com/v2`     |
+| Channel   | `book`                       |
+| Symbols   | `BTC/USD`, `ETH/USD`         |
+| Depth     | `100`                        |
+| Output    | one binary file per pair, windowed by capture time (e.g. `BTCUSD-<start>-<end>.bin`) |
 
-Each frame received after the subscription is acknowledged is written as one
-line of raw JSON: the initial snapshot, updates and heartbeats. The file is
-opened in append mode, so each run adds to it. The file is created in the
-working directory, and each line is flushed as it is written.
-
-The connection status message and the subscription acknowledgement are
-consumed during `Connect()` and printed to the console. They are not written
-to the file.
+Each pair gets its own writer lane on its own thread; a write failure only
+takes down that pair's lane (and triggers an unsubscribe for it) — the rest
+of the feed keeps running. The connection status message and subscription
+acknowledgements are consumed during `Connect()` and printed to the console,
+not written to the files.
 
 ## Requirements
 
