@@ -16,7 +16,7 @@ file(GLOB_RECURSE PROJECT_HEADERS CONFIGURE_DEPENDS
 
 project(data_feed CXX)
 
-find_package(Boost REQUIRED CONFIG COMPONENTS system)
+find_package(Boost REQUIRED CONFIG COMPONENTS system lockfree)
 find_package(OpenSSL REQUIRED)
 
 add_executable(${PROJECT_NAME})
@@ -28,6 +28,7 @@ target_include_directories(${PROJECT_NAME} SYSTEM PRIVATE
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
     Boost::system
+    Boost::lockfree
     OpenSSL::SSL
     OpenSSL::Crypto)
 

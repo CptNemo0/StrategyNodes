@@ -2,10 +2,11 @@
 
 #include <sec_api/stdlib_s.h>
 
+#include <algorithm>
 #include <array>
+#include <charconv>
 #include <cstdlib>
 #include <optional>
-#include <ranges>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -15,6 +16,14 @@
 namespace data_feed {
 
 namespace {
+
+i64 Pow10(u32 exponent) {
+  i64 result{1};
+  for (u32 i{0}; i < exponent; ++i) {
+    result *= 10;
+  }
+  return result;
+}
 
 constexpr std::array<u32, 256> BuildCrc32Table() {
   std::array<u32, 256> table{};
@@ -59,14 +68,27 @@ u32 Crc32(std::string_view data) {
   return crc ^ 0xFFFFFFFFu;
 }
 
-i64 double_string_to_i64(std::string_view value) {
-  i64 return_value{0};
-  for (char digit : value | std::ranges::views::filter(
-                                [](char c) { return c >= '0' && c <= '9'; })) {
-    return_value += digit - '0';
-    return_value *= 10;
+i64 ScaleDecimalStringToI64(std::string_view value, u32 decimals) {
+  const std::size_t dot = value.find('.');
+  const std::string_view integer_part = value.substr(0, dot);
+  const std::string_view fraction_part = dot == std::string_view::npos
+                                             ? std::string_view{}
+                                             : value.substr(dot + 1);
+
+  i64 integer_value{0};
+  std::from_chars(integer_part.data(),
+                  integer_part.data() + integer_part.size(), integer_value);
+
+  const std::size_t digits_used =
+      std::min<std::size_t>(fraction_part.size(), decimals);
+  i64 fraction_value{0};
+  if (digits_used > 0) {
+    std::from_chars(fraction_part.data(), fraction_part.data() + digits_used,
+                    fraction_value);
   }
-  return return_value / 10;
+
+  return integer_value * Pow10(decimals) +
+         fraction_value * Pow10(decimals - static_cast<u32>(digits_used));
 }
 
 }  // namespace data_feed

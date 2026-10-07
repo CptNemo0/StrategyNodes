@@ -8,12 +8,9 @@
 #include <boost/beast/core.hpp>
 #include <boost/beast/http.hpp>
 #include <boost/beast/http/field.hpp>
-#include <cassert>
 #include <chrono>
 #include <format>
 #include <memory>
-#include <sstream>
-#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -22,6 +19,7 @@
 #include "constants.h"
 #include "https_client_one_shot.h"
 #include "kraken_credentials.h"
+#include "kraken_rest_error.h"
 #include "kraken_websocket_token.h"
 #include "utility_ssl.h"
 
@@ -91,19 +89,8 @@ KrakenWebsocketTokenGenerator::GenerateToken() const {
   rapidjson::Document json_document;
   json_document.Parse(result.body().c_str());
 
-  const rapidjson::Value& error_array = json_document["error"];
-  assert(error_array.IsArray());
-  if (!error_array.Empty()) {
-    std::stringstream error_stream{};
-    error_stream << "Errors when requesting the websocket token: ";
-
-    for (auto i{0uz}; i < error_array.Size(); ++i) {
-      error_stream << (error_array[i].IsString()
-                           ? std::format("\t{}\n", error_array[i].GetString())
-                           : "\t[empty error field]\n");
-    }
-    throw std::runtime_error{std::move(error_stream.str())};
-  }
+  ThrowOnKrakenRestError(json_document,
+                        "Errors when requesting the websocket token: ");
 
   rapidjson::Value& result_object = json_document["result"];
   std::string token = std::move(result_object["token"].GetString());

@@ -20,6 +20,8 @@ inline constexpr std::string_view kKrakenPrivateKeyVarName =
 inline constexpr std::string_view kKrakenRestEndpoint = "api.kraken.com";
 inline constexpr std::string_view kKrakenTokenEndpoint =
     "/0/private/GetWebSocketsToken";
+inline constexpr std::string_view kKrakenAssetPairsEndpoint =
+    "/0/public/AssetPairs";
 
 inline constexpr std::string_view kKrakenWsL3Endpoint =
     "wss://ws-l3.kraken.com/v2";
@@ -39,7 +41,11 @@ inline constexpr std::string_view kKrakenWsL2Target = "/v2";
 // the default VITE_FEED_URL in frontend/src/App.tsx.
 inline constexpr u16 kFrontendStreamPort = 8765;
 
-constexpr std::size_t kMaxQueuedFrames = 256;
+// Capacity of the SPSC queue between the feed and the parser.
+inline constexpr std::size_t kMaxQueuedFrames = 256;
+
+// Capacity of each SPSC queue between the parser and a writer.
+inline constexpr std::size_t kMaxQueuedMessages = 256;
 
 }  // namespace data_feed
 

@@ -14,6 +14,8 @@ struct L2Message {
   enum class Type : u32 { kUpdate, kSnapshot };
 
   struct Level {
+    // Fixed-point, scaled by 10^decimals (see PairPrecision) so the exact
+    // decimal text Kraken sent round-trips without floating-point error.
     i64 price;
     i64 quantity;
   };

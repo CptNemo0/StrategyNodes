@@ -1,23 +1,28 @@
-#include <atomic>
 #include <csignal>
 #include <exception>
 #include <flat_map>
+#include <flat_set>
 #include <fstream>
 #include <ios>
 #include <memory>
-#include <optional>
 #include <print>
 #include <ranges>
+#include <stop_token>
 #include <string>
 #include <string_view>
+#include <thread>
+#include <utility>
+#include <vector>
 
 #include "aliasing.h"
 #include "kraken_credentials.h"
-#include "kraken_l2_message_parser.h"
+#include "kraken_pair_precision.h"
 #include "kraken_websocket_token_generator.h"
 #include "l2_kraken_data_feed.h"
-#include "l2_message.h"
-#include "l2_message_file_writer.h"
+#include "l2_message_dispatcher.h"
+#include "l2_message_writer_lane.h"
+#include "pipeline_status.h"
+#include "spsc_util.h"
 
 namespace {
 
@@ -26,17 +31,13 @@ constexpr u64 kBookDepth = 100;
 // Every raw frame from the venue is appended here, one per line.
 constexpr std::string_view kOutputPath = "kraken_l2_messages.txt";
 
-// Set on Ctrl+C so the loop exits and the .bin files get their final names.
-std::atomic<bool> stop_requested{false};
-
-using WriterMap = std::flat_map<std::string,
-                                std::unique_ptr<data_feed::L2MessageFileWriter>,
-                                std::less<>>;
+// Global so the Ctrl+C handler can reach it.
+data_feed::PipelineStatus status;
 
 }  // namespace
 
 int main() {
-  std::signal(SIGINT, [](int) { stop_requested = true; });
+  std::signal(SIGINT, [](int) { status.stop_requested = true; });
 
   try {
     std::unique_ptr<data_feed::KrakenCredentials> credentials =
@@ -46,15 +47,27 @@ int main() {
     const std::flat_map<std::string, u64> symbol_depth_mapping{
         {"BTC/USD", kBookDepth}, {"ETH/USD", kBookDepth}};
 
-    data_feed::Level2KrakenDataFeed feed{signer, symbol_depth_mapping};
+    const data_feed::PairPrecisionMap pair_precision =
+        data_feed::FetchKrakenPairPrecision(symbol_depth_mapping |
+                                            std::views::keys |
+                                            std::ranges::to<std::vector>());
 
-    const WriterMap writers =
+    const std::unique_ptr<data_feed::Level2KrakenDataFeed> feed =
+        std::make_unique<data_feed::Level2KrakenDataFeed>(signer,
+                                                          symbol_depth_mapping);
+
+    // Declared before the parser so the parser joins first and every message
+    // it dispatched reaches a still running lane.
+    const data_feed::WriterLaneMap lanes =
         symbol_depth_mapping | std::views::keys |
         std::views::transform([](const std::string& symbol) {
           return std::pair{
-              symbol, std::make_unique<data_feed::L2MessageFileWriter>(symbol)};
+              symbol, std::make_unique<data_feed::L2MessageWriterLane>(symbol)};
         }) |
-        std::ranges::to<WriterMap>();
+        std::ranges::to<data_feed::WriterLaneMap>();
+
+    const std::unique_ptr<data_feed::FrameQueue> frames =
+        std::make_unique<data_feed::FrameQueue>();
 
     std::ofstream output{std::string{kOutputPath}, std::ios::app};
     if (!output) {
@@ -62,27 +75,35 @@ int main() {
       return 1;
     }
 
-    feed.Connect();
+    feed->Connect();
+
+    // Declared after the queue and lanes so it is joined before they die.
+    const std::jthread parser{[&frames, &lanes,
+                               &pair_precision](const std::stop_token& stop) {
+      data_feed::ParseAndDispatch(stop, *frames, lanes, pair_precision, status);
+    }};
+
+    std::flat_set<std::string> unsubscribed;
 
     // Heartbeats arrive every second, so the flag is checked regularly.
-    while (!stop_requested) {
-      const std::string frame = feed.Next();
+    while (!status.stop_requested) {
+      // A lane failure only kills that pair's lane (see L2MessageWriterLane);
+      // unsubscribing here is what actually stops the feed sending it data.
+      for (const auto& [symbol, lane] : lanes) {
+        if (lane->failed() && !unsubscribed.contains(symbol)) {
+          std::println("Lane for {} failed; unsubscribing", symbol);
+          feed->Unsubscribe(symbol);
+          unsubscribed.insert(symbol);
+        }
+      }
+
+      std::string frame = feed->Next();
       std::println(output, "{}", frame);
       output.flush();
-
-      const std::optional<data_feed::L2Message> message =
-          data_feed::ParseKrakenL2Message(frame);
-      if (!message) {
-        continue;
-      }
-
-      const auto writer = writers.find(message->symbol);
-      if (writer != writers.end()) {
-        writer->second->Write(*message);
-      }
+      data_feed::PushBlocking(*frames, std::move(frame), status.failed);
     }
 
-    feed.Close();
+    feed->Close();
   } catch (const std::exception& e) {
     std::println("Fatal: {}", e.what());
     return 1;

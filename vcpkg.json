@@ -3,10 +3,15 @@
   "version-string": "0.1.0",
   "$comment": "builtin-baseline freezes the entire transitive dependency graph to one vcpkg registry commit, so nothing updates unless this hash changes. The overrides below additionally hard-pin every direct dependency to its exact installed version, immune even to a baseline bump.",
   "builtin-baseline": "495848814af4cc2760e70f7440c2dbe66d3ff196",
-  "dependencies": ["boost-beast", "openssl", "protobuf"],
+  "dependencies": ["boost-beast", "boost-lockfree", "openssl", "protobuf"],
   "overrides": [
     {
       "name": "boost-beast",
+      "version": "1.91.0",
+      "port-version": 0
+    },
+    {
+      "name": "boost-lockfree",
       "version": "1.91.0",
       "port-version": 0
     },
