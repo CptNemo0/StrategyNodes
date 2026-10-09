@@ -1,0 +1,152 @@
+// Wire contract between the C++ backend and the TypeScript frontend.
+// Compiled with protoc (C++) and protoc-gen-es (TypeScript).
+//
+// Design notes, because several choices here are deliberate and not obvious:
+//
+//   * Prices and quantities are integers scaled by a power of ten, exactly as
+//     in the .bin recordings (see L2FileHeader). The scale arrives once per
+//     stream in StreamInfo. Sending doubles instead would discard the exact
+//     decimal text the venue sent, which the whole fixed-point path exists to
+//     preserve.
+//   * A websocket frame is already length delimited, so one message per frame
+//     needs no framing of its own. This is why proto suits the wire but not
+//     the recordings, where framing would have to be hand rolled anyway.
+//   * Timestamps are sfixed64, not int64. Nanoseconds since the epoch are
+//     around 1.8e18, so every varint would spend 9 to 10 bytes; sfixed64 is
+//     always 8.
+//   * Book messages carry a numeric stream_id rather than a symbol string, so
+//     a high rate stream does not repeat "BTC/USD" on every update. The
+//     mapping arrives in StreamInfo.
+//   * Anything the backend can replay from a .bin must be expressible here,
+//     so the frontend cannot tell a live feed from a replay. That is why the
+//     venue checksum and both timestamps are on the wire too.
+
+syntax = "proto3";
+
+package trading.market_data.v1;
+
+// ---------------------------------------------------------------------------
+// Server to client
+// ---------------------------------------------------------------------------
+
+// One price level. Both fields are integers scaled by the decimals in the
+// StreamInfo for this stream: price / 10^price_decimals is the real price.
+// Within a Book of kind DELTA, a quantity of zero means the level is gone.
+message Level {
+  sint64 price = 1;
+  sint64 quantity = 2;
+}
+
+// Establishes what a stream_id means and how to decode its numbers. Sent
+// before any Book for that stream, and again on reconnect. A client that
+// receives a Book for an unknown stream_id must drop it rather than guess a
+// scale.
+message StreamInfo {
+  uint32 stream_id = 1;
+  string symbol = 2;
+  string venue = 3;
+  // Book depth subscribed to at the venue.
+  uint32 depth = 4;
+  uint32 price_decimals = 5;
+  uint32 qty_decimals = 6;
+}
+
+// Book state for one stream.
+//
+// Snapshot and delta are one message rather than two, because they carry
+// identical fields and the recordings already model the distinction as an
+// enum. Re-broadcasting a recorded message is then a field copy with no
+// branching, and a new field cannot be added to one and forgotten on the
+// other.
+message Book {
+  enum Kind {
+    KIND_UNSPECIFIED = 0;
+    // Replaces everything the client holds for this stream.
+    KIND_SNAPSHOT = 1;
+    // Changed levels only; apply in arrival order.
+    KIND_DELTA = 2;
+  }
+
+  uint32 stream_id = 1;
+  Kind kind = 2;
+  // Best first.
+  repeated Level bids = 3;
+  repeated Level asks = 4;
+  // The venue's CRC32 over the book this message leaves behind, so a client
+  // can prove it applied the deltas correctly. Zero if the venue omitted it.
+  fixed32 checksum = 5;
+  // The venue's own timestamp, nanoseconds since the Unix epoch.
+  sfixed64 venue_time_ns = 6;
+  // When the backend read the frame off the venue socket. Subtracting the
+  // venue time gives the transport delay.
+  sfixed64 capture_time_ns = 7;
+}
+
+// Health of the backend's connection to the venue, so the frontend can
+// distinguish a quiet market from a broken feed, and can show a pair that was
+// dropped because its writer lane failed.
+message FeedStatus {
+  enum State {
+    STATE_UNSPECIFIED = 0;
+    STATE_CONNECTING = 1;
+    STATE_LIVE = 2;
+    // Connected, but at least one subscribed pair is not flowing.
+    STATE_DEGRADED = 3;
+    STATE_DISCONNECTED = 4;
+  }
+
+  State state = 1;
+  // Free text for the UI; never parsed.
+  string detail = 2;
+  // Streams currently subscribed and healthy.
+  repeated uint32 healthy_stream_ids = 3;
+}
+
+// Sent when nothing else has gone out recently, so a client can tell an idle
+// market from a dead socket. Empty: the envelope already carries the time.
+message Heartbeat {}
+
+// Every frame the backend pushes. New event kinds extend the oneof.
+message MarketDataEvent {
+  // Increments by one per frame per connection, so a client can detect that
+  // it missed something and ask for a fresh snapshot.
+  uint64 sequence = 1;
+  // When the backend put this frame on the wire, nanoseconds since the Unix
+  // epoch. Against capture_time_ns this gives the backend's internal delay.
+  sfixed64 send_time_ns = 2;
+
+  oneof payload {
+    StreamInfo stream_info = 3;
+    Book book = 4;
+    FeedStatus feed_status = 5;
+    Heartbeat heartbeat = 6;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Client to server
+// ---------------------------------------------------------------------------
+// These map directly onto Level2KrakenDataFeed::Subscribe and ::Unsubscribe,
+// which already exist and already handle a resubscribe at a new depth.
+
+message Subscribe {
+  string symbol = 1;
+  // Must be one of the depths the venue accepts (kKrakenL2Depths).
+  uint32 depth = 2;
+}
+
+message Unsubscribe {
+  string symbol = 1;
+}
+
+// Asks the backend to resend StreamInfo and a fresh snapshot for every
+// stream, which is how a client recovers from a detected sequence gap.
+message Resync {}
+
+message ClientCommand {
+  oneof command {
+    Subscribe subscribe = 1;
+    Unsubscribe unsubscribe = 2;
+    Resync resync = 3;
+  }
+}
