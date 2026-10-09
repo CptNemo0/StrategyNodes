@@ -1,7 +1,7 @@
+#include <chrono>
 #include <csignal>
 #include <exception>
 #include <flat_map>
-#include <flat_set>
 #include <fstream>
 #include <ios>
 #include <memory>
@@ -18,11 +18,11 @@
 #include "kraken_credentials.h"
 #include "kraken_pair_precision.h"
 #include "kraken_websocket_token_generator.h"
+#include "l2_feed_loop.h"
 #include "l2_kraken_data_feed.h"
 #include "l2_message_dispatcher.h"
 #include "l2_message_writer_lane.h"
 #include "pipeline_status.h"
-#include "spsc_util.h"
 
 namespace {
 
@@ -83,27 +83,15 @@ int main() {
       data_feed::ParseAndDispatch(stop, *frames, lanes, pair_precision, status);
     }};
 
-    std::flat_set<std::string> unsubscribed;
+    // Declared last so it joins first: the network loop must stop producing
+    // frames before the parser (and its queue) are torn down.
+    const std::jthread network{[&feed, &frames, &lanes, &output] {
+      data_feed::RunL2FeedLoop(*feed, *frames, lanes, output, status);
+    }};
 
-    // Heartbeats arrive every second, so the flag is checked regularly.
     while (!status.stop_requested) {
-      // A lane failure only kills that pair's lane (see L2MessageWriterLane);
-      // unsubscribing here is what actually stops the feed sending it data.
-      for (const auto& [symbol, lane] : lanes) {
-        if (lane->failed() && !unsubscribed.contains(symbol)) {
-          std::println("Lane for {} failed; unsubscribing", symbol);
-          feed->Unsubscribe(symbol);
-          unsubscribed.insert(symbol);
-        }
-      }
-
-      std::string frame = feed->Next();
-      std::println(output, "{}", frame);
-      output.flush();
-      data_feed::PushBlocking(*frames, std::move(frame), status.failed);
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
-
-    feed->Close();
   } catch (const std::exception& e) {
     std::println("Fatal: {}", e.what());
     return 1;
