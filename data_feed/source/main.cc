@@ -59,10 +59,13 @@ int main() {
     // Declared before the parser so the parser joins first and every message
     // it dispatched reaches a still running lane.
     const data_feed::WriterLaneMap lanes =
-        symbol_depth_mapping | std::views::keys |
-        std::views::transform([](const std::string& symbol) {
+        symbol_depth_mapping |
+        std::views::transform([&pair_precision](const auto& entry) {
+          const auto& [symbol, depth] = entry;
           return std::pair{
-              symbol, std::make_unique<data_feed::L2MessageWriterLane>(symbol)};
+              symbol,
+              std::make_unique<data_feed::L2MessageWriterLane>(
+                  symbol, static_cast<u32>(depth), pair_precision.at(symbol))};
         }) |
         std::ranges::to<data_feed::WriterLaneMap>();
 

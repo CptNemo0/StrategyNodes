@@ -19,9 +19,9 @@ void ParseAndDispatch(const std::stop_token& stop,
                       PipelineStatus& status) {
   Drain(
       stop, "parser", frames,
-      [&lanes, &precision](const std::string& frame) {
+      [&lanes, &precision](const RawFrame& frame) {
         std::optional<L2Message> message =
-            ParseKrakenL2Message(frame, precision);
+            ParseKrakenL2Message(frame.json, frame.capture_time_ns, precision);
         if (!message) {
           return;
         }

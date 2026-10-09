@@ -5,15 +5,17 @@
 #include <string>
 #include <utility>
 
+#include "aliasing.h"
 #include "spsc_util.h"
+#include "utility.h"
 
 namespace data_feed {
 
 void RunL2FeedLoop(Level2KrakenDataFeed& feed,
-                    FrameQueue& frames,
-                    const WriterLaneMap& lanes,
-                    std::ofstream& output,
-                    PipelineStatus& status) {
+                   FrameQueue& frames,
+                   const WriterLaneMap& lanes,
+                   std::ofstream& output,
+                   PipelineStatus& status) {
   std::flat_set<std::string> unsubscribed;
 
   // Heartbeats arrive every second, so the flag is checked regularly.
@@ -29,9 +31,14 @@ void RunL2FeedLoop(Level2KrakenDataFeed& feed,
     }
 
     std::string frame = feed.Next();
+    // Stamped before the log write below, so the capture time measures when
+    // the frame arrived rather than when we finished writing it out.
+    const i64 capture_time_ns = UnixNanosNow();
+
     std::println(output, "{}", frame);
     output.flush();
-    PushBlocking(frames, std::move(frame), status.failed);
+    PushBlocking(frames, RawFrame{std::move(frame), capture_time_ns},
+                 status.failed);
   }
 
   feed.Close();

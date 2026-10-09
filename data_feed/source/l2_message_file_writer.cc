@@ -9,11 +9,17 @@
 #include <string>
 
 #include "aliasing.h"
+#include "constants.h"
+#include "kraken_pair_precision.h"
+#include "l2_file_header.h"
 #include "l2_message.h"
+#include "utility.h"
 
 namespace data_feed {
 
 namespace {
+
+constexpr i64 kNanosPerSecond{1'000'000'000};
 
 i64 UnixTimeNow() {
   return std::chrono::duration_cast<std::chrono::seconds>(
@@ -23,16 +29,28 @@ i64 UnixTimeNow() {
 
 }  // namespace
 
-L2MessageFileWriter::L2MessageFileWriter(const std::string& symbol)
-    : file_stem_{std::format("{}-{}",
+L2MessageFileWriter::L2MessageFileWriter(const std::string& symbol,
+                                         u32 depth,
+                                         const PairPrecision& precision)
+    : start_time_ns_{UnixNanosNow()},
+      file_stem_{std::format("{}-{}",
                              symbol | std::views::filter([](char c) {
                                return c != '/';
                              }) | std::ranges::to<std::string>(),
-                             UnixTimeNow())},
+                             start_time_ns_ / kNanosPerSecond)},
       path_{file_stem_ + ".bin"},
       output_{path_, std::ios::binary} {
   if (!output_) {
     throw std::runtime_error{std::format("Cannot open {}", path_.string())};
+  }
+
+  const L2FileHeader header =
+      MakeL2FileHeader(kVenueKraken, symbol, depth, precision, start_time_ns_);
+  output_.write(reinterpret_cast<const char*>(&header), sizeof(header));
+  output_.flush();
+  if (!output_) {
+    throw std::runtime_error{
+        std::format("Cannot write header to {}", path_.string())};
   }
 }
 

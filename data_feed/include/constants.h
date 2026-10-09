@@ -10,6 +10,10 @@ namespace data_feed {
 
 inline constexpr std::string_view kSystemName = "Stus Trading Initiative";
 
+// Recorded in every .bin file header, so a recording says which venue it came
+// from without relying on where the file happens to sit.
+inline constexpr std::string_view kVenueKraken = "kraken";
+
 inline constexpr std::string_view kConfigDirectoryVarName =
     "TRADING_SYSTEM_CONFIG_DIR";
 

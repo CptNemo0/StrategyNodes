@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "aliasing.h"
+#include "kraken_pair_precision.h"
 #include "l2_message.h"
 
 namespace data_feed {
@@ -16,9 +17,14 @@ namespace data_feed {
 // `[symbol]-[start unix time].bin` while recording, and renames it to
 // `[symbol]-[start unix time]-[end unix time].bin` on Close() or destruction.
 // The '/' of the pair is dropped from the file name, e.g. "BTCUSD".
+//
+// The file opens with an L2FileHeader carrying the depth and precision, which
+// is the only record of what the integers in the messages mean.
 class L2MessageFileWriter {
  public:
-  explicit L2MessageFileWriter(const std::string& symbol);
+  L2MessageFileWriter(const std::string& symbol,
+                      u32 depth,
+                      const PairPrecision& precision);
 
   L2MessageFileWriter(const L2MessageFileWriter&) = delete;
   L2MessageFileWriter& operator=(const L2MessageFileWriter&) = delete;
@@ -32,6 +38,9 @@ class L2MessageFileWriter {
   void Close();
 
  private:
+  // Declared first: the file name and the header both derive from it, so they
+  // agree on when the recording started.
+  i64 start_time_ns_;
   std::string file_stem_;
   std::filesystem::path path_;
   std::ofstream output_;

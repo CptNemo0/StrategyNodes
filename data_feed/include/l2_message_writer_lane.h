@@ -7,7 +7,9 @@
 #include <string>
 #include <thread>
 
+#include "aliasing.h"
 #include "constants.h"
+#include "kraken_pair_precision.h"
 #include "l2_message.h"
 #include "l2_message_file_writer.h"
 
@@ -22,7 +24,11 @@ class L2MessageWriterLane {
   using MessageQueue = boost::lockfree::
       spsc_queue<L2Message, boost::lockfree::capacity<kMaxQueuedMessages>>;
 
-  explicit L2MessageWriterLane(const std::string& symbol);
+  // `depth` and `precision` are recorded in the file header; see
+  // L2MessageFileWriter.
+  L2MessageWriterLane(const std::string& symbol,
+                      u32 depth,
+                      const PairPrecision& precision);
 
   L2MessageWriterLane(const L2MessageWriterLane&) = delete;
   L2MessageWriterLane& operator=(const L2MessageWriterLane&) = delete;

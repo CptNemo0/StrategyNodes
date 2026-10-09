@@ -29,11 +29,17 @@ std::span<std::byte> Write(std::span<std::byte> out,
   return out.subspan(size);
 }
 
+// Copies one trivially copyable scalar and returns the rest of out.
+template <typename T>
+std::span<std::byte> WriteValue(std::span<std::byte> out, const T& value) {
+  static_assert(std::is_trivially_copyable_v<T>);
+  return Write(out, &value, sizeof(value));
+}
+
 std::span<std::byte> WriteSide(std::span<std::byte> out,
                                const std::vector<L2Message::Level>& side) {
   const u64 byte_size = side.size() * sizeof(L2Message::Level);
-  return Write(Write(out, &byte_size, sizeof(byte_size)), side.data(),
-               byte_size);
+  return Write(WriteValue(out, byte_size), side.data(), byte_size);
 }
 
 }  // namespace
@@ -43,7 +49,14 @@ u64 L2Message::Serialize(std::span<std::byte> out) const {
     throw std::length_error{"L2Message::Serialize: output buffer too small"};
   }
 
-  WriteSide(WriteSide(Write(out, &type, sizeof(type)), buys), sells);
+  // Written one field at a time rather than nested, so the on-disk order is
+  // readable top to bottom and matches the layout comment in the header.
+  std::span<std::byte> rest = WriteValue(out, type);
+  rest = WriteValue(rest, checksum);
+  rest = WriteValue(rest, venue_time_ns);
+  rest = WriteValue(rest, capture_time_ns);
+  WriteSide(WriteSide(rest, buys), sells);
+
   return GetByteSize();
 }
 
