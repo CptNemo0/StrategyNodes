@@ -48,6 +48,7 @@ Each module is expected to grow its own sources within its directory.
 - `l2/` — venue-agnostic L2 data: `Message`, `PairPrecision`, `.bin` `FileHeader` and `FileWriter`
 - `frontend/` — `Transmitter` streaming to the TS frontend
 - `kraken/` — everything Kraken-specific: constants, credentials, REST calls, `L2MessageParser`, `VenueManager`
+- `venue/` — venue-agnostic command routing: the `Manager` interface each venue implements, and the `Router` that hands out subscription ids and reconnects venues
 
 A new venue gets its own directory and namespace with plain classes (no `template <Venue>` specializations). New directories must be added to `PROJECT_MODULES` in `data_feed/CMakeLists.txt`.
 

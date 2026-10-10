@@ -200,7 +200,8 @@ message CommandResult {
   uint64 request_id = 1;
 
   oneof result {
-    // Start: the new subscription's id.
+    // Start: the new subscription's id, or an existing recording's when the
+    // pair is already recorded at the same depth.
     uint64 started_id = 2;
     // Stop, Watch, Unwatch.
     Ok ok = 3;
