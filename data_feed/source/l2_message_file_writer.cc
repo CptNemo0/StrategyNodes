@@ -8,7 +8,9 @@
 #include <stdexcept>
 #include <stop_token>
 #include <string>
+#include <string_view>
 #include <thread>
+#include <utility>
 
 #include "aliasing.h"
 #include "constants.h"
@@ -32,7 +34,8 @@ i64 UnixTimeNow() {
 
 }  // namespace
 
-L2MessageFileWriter::L2MessageFileWriter(const std::string& symbol,
+L2MessageFileWriter::L2MessageFileWriter(std::string_view venue,
+                                         const std::string& symbol,
                                          u32 depth,
                                          const PairPrecision& precision)
     : start_time_ns_{UnixNanosNow()},
@@ -48,7 +51,7 @@ L2MessageFileWriter::L2MessageFileWriter(const std::string& symbol,
   }
 
   const L2FileHeader header =
-      MakeL2FileHeader(kVenueKraken, symbol, depth, precision, start_time_ns_);
+      MakeL2FileHeader(venue, symbol, depth, precision, start_time_ns_);
   output_.write(reinterpret_cast<const char*>(&header), sizeof(header));
   output_.flush();
   if (!output_) {
@@ -72,6 +75,10 @@ L2MessageFileWriter::~L2MessageFileWriter() {
   } catch (...) {
     // A failed rename leaves the data under the recording name.
   }
+}
+
+void L2MessageFileWriter::Receive(L2Message message) {
+  PushBlocking(queue_, std::move(message), failed_);
 }
 
 void L2MessageFileWriter::Write(const L2Message& message) {

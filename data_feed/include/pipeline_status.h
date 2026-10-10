@@ -5,18 +5,17 @@
 
 namespace data_feed {
 
-// Flags shared by every thread of the feed -> parser -> writers pipeline.
+// Shared by a venue's feed and parser threads. Each component stops its own
+// thread; this only records that one of them died.
 struct PipelineStatus {
-  // Called by a thread that cannot continue; stops the whole pipeline.
-  void Fail() {
-    failed = true;
-    stop_requested = true;
-  }
+  // Called by a thread that cannot continue.
+  void Fail() { failed = true; }
 
-  // Set on Ctrl+C or a failure, so the feed loop exits.
-  std::atomic<bool> stop_requested{false};
-  // Set only on a failure. Producers then stop waiting for space, since a dead
-  // consumer would never free it.
+  // Only call while neither thread is running.
+  void Reset() { failed = false; }
+
+  // Producers stop waiting for queue space once set, since a dead consumer
+  // would never free it.
   std::atomic<bool> failed{false};
 };
 

@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -15,11 +16,12 @@
 #include "constants.h"
 #include "kraken_pair_precision.h"
 #include "l2_message.h"
+#include "receiver.h"
 
 namespace data_feed {
 
-// Records the L2Messages of a single pair on its own thread. The parser pushes
-// into queue(); the thread drains it into
+// Records the L2Messages of a single pair on its own thread. Receive() queues
+// a message; the thread drains the queue into
 // `[symbol]-[start unix time].bin`, which is renamed to
 // `[symbol]-[start unix time]-[end unix time].bin` on destruction. The '/' of
 // the pair is dropped from the file name, e.g. "BTCUSD".
@@ -28,13 +30,16 @@ namespace data_feed {
 // is the only record of what the integers in the messages mean.
 //
 // A write failure only marks this writer failed() -- every other pair's
-// writer keeps running. Must not move, as the thread refers to this object.
-class L2MessageFileWriter {
+// writer keeps running, and messages received afterwards are dropped. Must not
+// move, as the thread refers to this object.
+class L2MessageFileWriter : public Receiver<L2Message> {
  public:
   using MessageQueue = boost::lockfree::
       spsc_queue<L2Message, boost::lockfree::capacity<kMaxQueuedMessages>>;
 
-  L2MessageFileWriter(const std::string& symbol,
+  // `venue` (e.g. "kraken") and the rest are recorded in the file header.
+  L2MessageFileWriter(std::string_view venue,
+                      const std::string& symbol,
                       u32 depth,
                       const PairPrecision& precision);
 
@@ -42,13 +47,13 @@ class L2MessageFileWriter {
   L2MessageFileWriter& operator=(const L2MessageFileWriter&) = delete;
 
   // Drains the queue, then closes and renames the file.
-  ~L2MessageFileWriter();
+  ~L2MessageFileWriter() override;
 
-  // Producer end, for the parser thread only.
-  MessageQueue& queue() { return queue_; }
+  // Queues the message for the writer thread, waiting while the queue is
+  // full. Only one thread may call it.
+  void Receive(L2Message message) override;
 
-  // Set once the writer thread hits a fatal error. The feed should
-  // unsubscribe this pair; nothing in-process does so automatically.
+  // Set once the writer thread hits a fatal error.
   const std::atomic<bool>& failed() const { return failed_; }
 
  private:
