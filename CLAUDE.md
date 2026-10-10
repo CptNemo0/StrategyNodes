@@ -38,6 +38,19 @@ The project is structured around trading concerns as separate top-level director
 
 Each module is expected to grow its own sources within its directory.
 
+### data_feed layout
+
+`data_feed/` is an executable, not a library: no `include/`/`source/` split. Each subdirectory is one top-level namespace (no root namespace; use `::net` etc. on a clash), headers and sources side by side, included from the `data_feed/` root (`#include "kraken/credentials.h"`). Header guards follow the path (`DATA_FEED_KRAKEN_CREDENTIALS_H_`). Names drop what the namespace already says (`kraken::Credentials`, not `KrakenCredentials`).
+
+- `core/` — project-independent building blocks: integer aliases, `Receiver`, SPSC helpers, `PipelineStatus`, time/decimal/env/crc utilities
+- `crypto/` — base64, HMAC, SHA
+- `net/` — TLS context, one-shot HTTPS client, `WebsocketFeed`, `RawFrame` queue
+- `l2/` — venue-agnostic L2 data: `Message`, `PairPrecision`, `.bin` `FileHeader` and `FileWriter`
+- `frontend/` — `Transmitter` streaming to the TS frontend
+- `kraken/` — everything Kraken-specific: constants, credentials, REST calls, `L2MessageParser`, `VenueManager`
+
+A new venue gets its own directory and namespace with plain classes (no `template <Venue>` specializations). New directories must be added to `PROJECT_MODULES` in `data_feed/CMakeLists.txt`.
+
 ## Documentation
 
 `https://docs.kraken.com/api/` - use this file to discover all available pages in kraken documentation before exploring further.

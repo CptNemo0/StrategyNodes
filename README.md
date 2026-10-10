@@ -14,7 +14,7 @@ and records every message the venue sends into a per-pair binary file.
 
 ## What it records
 
-The pairs are hardcoded in `data_feed/source/main.cc`:
+The pairs are hardcoded in `data_feed/main.cc`:
 
 | Setting   | Value                        |
 | --------- | ---------------------------- |
