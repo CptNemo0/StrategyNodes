@@ -1,6 +1,8 @@
 #ifndef DATA_FEED_RECEIVER_H_
 #define DATA_FEED_RECEIVER_H_
 
+#include <concepts>
+
 namespace data_feed {
 
 // Consumes the messages of one subscription. Knows what to do with them, not
@@ -14,6 +16,10 @@ class Receiver {
   // process it in place.
   virtual void Receive(Message message) = 0;
 };
+
+// A concrete Receiver of `Message`s.
+template <typename T, typename Message>
+concept ReceiverOf = std::derived_from<T, Receiver<Message>>;
 
 }  // namespace data_feed
 

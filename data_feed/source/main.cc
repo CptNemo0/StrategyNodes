@@ -6,7 +6,9 @@
 #include <thread>
 
 #include "aliasing.h"
+#include "frontend_transmitter.h"
 #include "kraken_venue_manager.h"
+#include "l2_message_file_writer.h"
 
 namespace {
 
@@ -22,8 +24,10 @@ int main() {
   try {
     data_feed::KrakenVenueManager kraken;
     kraken.Connect();
-    kraken.Subscribe(/*symbol=*/"BTC/USD", /*depth*/ 100);
-    kraken.Subscribe(/*symbol=*/"ETH/USD", /*depth*/ 100);
+    kraken.Subscribe<data_feed::L2MessageFileWriter>(/*symbol=*/"BTC/USD",
+                                                     /*depth*/ 100);
+    kraken.Subscribe<data_feed::FrontendTransmitter>(/*symbol=*/"ETH/USD",
+                                                     /*depth*/ 100);
 
     while (!stop_requested && !kraken.failed()) {
       std::this_thread::sleep_for(std::chrono::milliseconds(100));

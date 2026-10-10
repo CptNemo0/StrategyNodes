@@ -16,7 +16,6 @@
 #include "kraken_l2_message_parser.h"
 #include "kraken_message_size_util.h"
 #include "kraken_pair_precision.h"
-#include "l2_message_file_writer.h"
 #include "venues.h"
 #include "websocket_data_feed.h"
 
@@ -83,7 +82,9 @@ void KrakenVenueManager::Disconnect() {
   DisconnectLocked();
 }
 
-void KrakenVenueManager::Subscribe(const std::string& symbol, u64 depth) {
+void KrakenVenueManager::SubscribeImpl(const std::string& symbol,
+                                       u64 depth,
+                                       ReceiverFactory make_receiver) {
   if (!std::ranges::contains(kKrakenL2Depths, depth)) {
     throw std::invalid_argument{
         std::format("Kraken has no L2 depth {} (see kKrakenL2Depths)", depth)};
@@ -102,12 +103,8 @@ void KrakenVenueManager::Subscribe(const std::string& symbol, u64 depth) {
 
   const auto subscription =
       subscriptions_
-          .emplace(
-              symbol,
-              Subscription{.depth = depth,
-                           .receiver = std::make_unique<L2MessageFileWriter>(
-                               kVenueKraken, symbol, static_cast<u32>(depth),
-                               precision)})
+          .emplace(symbol, Subscription{.depth = depth,
+                                        .receiver = make_receiver(precision)})
           .first;
   try {
     // The parser knows where the messages go before the venue sends any.

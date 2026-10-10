@@ -1,6 +1,7 @@
 #ifndef DATA_FEED_KRAKEN_VENUE_MANAGER_H_
 #define DATA_FEED_KRAKEN_VENUE_MANAGER_H_
 
+#include <concepts>
 #include <flat_map>
 #include <functional>
 #include <memory>
@@ -9,10 +10,13 @@
 #include <string_view>
 
 #include "aliasing.h"
+#include "constants.h"
 #include "kraken_credentials.h"
 #include "kraken_l2_message_parser.h"
+#include "kraken_pair_precision.h"
 #include "kraken_websocket_token_generator.h"
 #include "l2_message.h"
+#include "l2_message_file_writer.h"
 #include "pipeline_status.h"
 #include "raw_frame.h"
 #include "receiver.h"
@@ -50,11 +54,23 @@ class VenueManager<Venue::kKraken> {
   // Subscriptions are kept. Does nothing while disconnected.
   void Disconnect();
 
-  // Records `symbol`'s (e.g. "BTC/USD") book at `depth`, which must be one of
-  // kKrakenL2Depths. Replaces any subscription to the pair at another depth.
-  // Fetches the pair's precision from the venue, so it blocks for a REST
-  // round trip.
-  void Subscribe(const std::string& symbol, u64 depth);
+  // Streams `symbol`'s (e.g. "BTC/USD") book at `depth`, which must be one of
+  // kKrakenL2Depths, into a new `ReceiverT`. Replaces any subscription to the
+  // pair at another depth. Fetches the pair's precision from the venue, so it
+  // blocks for a REST round trip.
+  template <typename ReceiverT = L2MessageFileWriter>
+    requires ReceiverOf<ReceiverT, L2Message> &&
+             std::constructible_from<ReceiverT,
+                                     std::string_view,
+                                     const std::string&,
+                                     u32,
+                                     const PairPrecision&>
+  void Subscribe(const std::string& symbol, u64 depth) {
+    SubscribeImpl(symbol, depth, [&](const PairPrecision& precision) {
+      return std::make_unique<ReceiverT>(kVenueKraken, symbol,
+                                         static_cast<u32>(depth), precision);
+    });
+  }
 
   // Drops the pair's subscription and closes its recording. Unknown pairs are
   // ignored.
@@ -69,6 +85,16 @@ class VenueManager<Venue::kKraken> {
     u64 depth;
     std::unique_ptr<Receiver<L2Message>> receiver;
   };
+
+  // Builds a subscription's receiver once the pair's precision is known.
+  using ReceiverFactory =
+      std::move_only_function<std::unique_ptr<Receiver<L2Message>>(
+          const PairPrecision&)>;
+
+  // Subscribe() for any receiver type.
+  void SubscribeImpl(const std::string& symbol,
+                     u64 depth,
+                     ReceiverFactory make_receiver);
 
   // Disconnect() and Unsubscribe() without the lock.
   void DisconnectLocked();
