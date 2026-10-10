@@ -17,6 +17,12 @@ inline constexpr u16 kStreamPort = 8765;
 
 // Streams the l2::Messages of a single pair to the frontend. Not implemented
 // yet: every message is dropped.
+//
+// Shares the venue's stream of the pair with every other subscription to it,
+// so it must adapt to what it gets: the stream may be deeper or shallower
+// than `depth` (a recording dictates it), it may start with updates rather
+// than a snapshot when the pair was already streaming, and a snapshot may
+// arrive at any time when the venue's depth changes.
 class Transmitter : public core::Receiver<l2::Message> {
  public:
   // Same arguments as l2::FileWriter, so either can back a subscription.

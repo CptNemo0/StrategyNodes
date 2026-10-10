@@ -4,7 +4,7 @@
 // Design notes, because several choices here are deliberate and not obvious:
 //
 //   * Prices and quantities are integers scaled by a power of ten, exactly as
-//     in the .bin recordings (see L2FileHeader). The scale arrives once per
+//     in the .bin recordings (see l2::FileHeader). The scale arrives once per
 //     stream in StreamInfo. Sending doubles instead would discard the exact
 //     decimal text the venue sent, which the whole fixed-point path exists to
 //     preserve.
@@ -20,10 +20,34 @@
 //   * Anything the backend can replay from a .bin must be expressible here,
 //     so the frontend cannot tell a live feed from a replay. That is why the
 //     venue checksum and both timestamps are on the wire too.
+//   * A book's stream_id is the id of the subscription it belongs to, so the
+//     id a client gets back from Start is the one it watches and stops.
+//   * The command and its reply are ClientCommand and CommandResult rather
+//     than Request and Response, which would shadow the fetch API's globals
+//     of the same names in the generated TypeScript.
 
 syntax = "proto3";
 
 package trading.market_data.v1;
+
+// ---------------------------------------------------------------------------
+// Shared
+// ---------------------------------------------------------------------------
+
+// The venues the backend streams from.
+enum Venue {
+  VENUE_UNSPECIFIED = 0;
+  VENUE_KRAKEN = 1;
+}
+
+// What a subscription does with its book.
+enum Sink {
+  SINK_UNSPECIFIED = 0;
+  // Shown to a client.
+  SINK_LIVE = 1;
+  // Recorded to a .bin on the backend.
+  SINK_RECORD = 2;
+}
 
 // ---------------------------------------------------------------------------
 // Server to client
@@ -109,7 +133,7 @@ message Heartbeat {}
 // Every frame the backend pushes. New event kinds extend the oneof.
 message MarketDataEvent {
   // Increments by one per frame per connection, so a client can detect that
-  // it missed something and ask for a fresh snapshot.
+  // it missed something and Watch again for a fresh snapshot.
   uint64 sequence = 1;
   // When the backend put this frame on the wire, nanoseconds since the Unix
   // epoch. Against capture_time_ns this gives the backend's internal delay.
@@ -120,33 +144,119 @@ message MarketDataEvent {
     Book book = 4;
     FeedStatus feed_status = 5;
     Heartbeat heartbeat = 6;
+    CommandResult result = 7;
+  }
+}
+
+// One subscription, live or recording, as listed to a client.
+message Subscription {
+  // Unique across venues; also the stream_id of its books.
+  uint64 id = 1;
+  Venue venue = 2;
+  string symbol = 3;
+  // Book depth subscribed to at the venue.
+  uint32 depth = 4;
+  Sink sink = 5;
+  // When it started, nanoseconds since the Unix epoch.
+  sfixed64 start_time_ns = 6;
+}
+
+message SubscriptionList {
+  // Every subscription on the backend; the client filters by sink.
+  repeated Subscription subscriptions = 1;
+}
+
+// Why a command failed.
+message CommandError {
+  enum Code {
+    CODE_UNSPECIFIED = 0;
+    // Malformed, or a command the backend does not know.
+    CODE_INVALID_COMMAND = 1;
+    // Not a depth the venue accepts.
+    CODE_INVALID_DEPTH = 2;
+    // The venue does not list the symbol.
+    CODE_UNKNOWN_SYMBOL = 3;
+    // No subscription has the id.
+    CODE_UNKNOWN_ID = 4;
+    // The subscription exists, but with another sink than the command named.
+    CODE_SINK_MISMATCH = 5;
+    // The pair already has a subscription; a pair has at most one.
+    CODE_SYMBOL_IN_USE = 6;
+    // The backend's connection to the venue failed.
+    CODE_VENUE_FAILED = 7;
+  }
+
+  Code code = 1;
+  // Free text for the UI; never parsed.
+  string detail = 2;
+}
+
+// Empty: the command succeeded and has nothing to return.
+message Ok {}
+
+// The reply to one ClientCommand.
+message CommandResult {
+  // The ClientCommand's request_id.
+  uint64 request_id = 1;
+
+  oneof result {
+    // Start: the new subscription's id.
+    uint64 started_id = 2;
+    // Stop, Watch, Unwatch.
+    Ok ok = 3;
+    // List.
+    SubscriptionList subscriptions = 4;
+    // Any command.
+    CommandError error = 5;
   }
 }
 
 // ---------------------------------------------------------------------------
 // Client to server
 // ---------------------------------------------------------------------------
-// These map directly onto Level2KrakenDataFeed::Subscribe and ::Unsubscribe,
-// which already exist and already handle a resubscribe at a new depth.
 
-message Subscribe {
-  string symbol = 1;
-  // Must be one of the depths the venue accepts (kKrakenL2Depths).
-  uint32 depth = 2;
+// Starts streaming a pair to a new subscription. Replied to with its id.
+message Start {
+  Venue venue = 1;
+  // E.g. "BTC/USD".
+  string symbol = 2;
+  // Must be one the venue accepts (kraken::kL2Depths).
+  uint32 depth = 3;
+  Sink sink = 4;
 }
 
-message Unsubscribe {
-  string symbol = 1;
+// Ends a subscription. The sink must match the subscription's, so a command
+// meant for a recording cannot stop a live feed.
+message Stop {
+  uint64 id = 1;
+  Sink sink = 2;
 }
 
-// Asks the backend to resend StreamInfo and a fresh snapshot for every
-// stream, which is how a client recovers from a detected sequence gap.
-message Resync {}
+// Lists every subscription.
+message List {}
 
+// Streams a live subscription's books to this client: a StreamInfo, a
+// snapshot, then updates. Replaces any subscription watched before.
+message Watch {
+  uint64 id = 1;
+}
+
+// Stops streaming books to this client.
+message Unwatch {}
+
+// Every frame a client sends.
 message ClientCommand {
+  // Chosen by the client and echoed in the CommandResult.
+  uint64 request_id = 1;
+
   oneof command {
-    Subscribe subscribe = 1;
-    Unsubscribe unsubscribe = 2;
-    Resync resync = 3;
+    Start start = 2;
+    Stop stop = 3;
+    List list = 4;
+    Watch watch = 5;
+    Unwatch unwatch = 6;
   }
+
+  // Playback: ListRecordings, Play, PlaybackNext, StopPlayback.
+  reserved 7 to 15;
 }

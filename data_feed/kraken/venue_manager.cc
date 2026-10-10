@@ -70,9 +70,9 @@ void VenueManager::Connect() {
   }
   connected_ = true;
 
-  for (const auto& [symbol, subscription] : subscriptions_) {
-    feed_.Send(BuildBookRequest(SubscriptionMethod::kSubscribe, symbol,
-                                subscription.depth));
+  for (const Subscription& subscription : subscriptions_.values()) {
+    feed_.Send(BuildBookRequest(SubscriptionMethod::kSubscribe,
+                                subscription.symbol, subscription.depth));
   }
 }
 
@@ -81,29 +81,31 @@ void VenueManager::Disconnect() {
   DisconnectLocked();
 }
 
-void VenueManager::SubscribeImpl(const std::string& symbol,
+void VenueManager::SubscribeImpl(SubscriptionId id,
+                                 const std::string& symbol,
                                  u64 depth,
                                  ReceiverFactory make_receiver) {
   if (!std::ranges::contains(kL2Depths, depth)) {
     throw std::invalid_argument{
         std::format("Kraken has no L2 depth {} (see kL2Depths)", depth)};
   }
-  // Fetched before locking, so the REST round trip blocks no one else.
+  // Checked before the REST round trip so a doomed call fails fast. The round
+  // trip itself runs unlocked, so it blocks no one else.
+  {
+    const std::scoped_lock lock{life_cycle_mutex_};
+    ThrowIfTakenLocked(id, symbol);
+  }
   const l2::PairPrecision precision =
       FetchPairPrecision(std::array{symbol}).at(symbol);
 
   const std::scoped_lock lock{life_cycle_mutex_};
-  const auto existing = subscriptions_.find(symbol);
-  if (existing != subscriptions_.end() && existing->second.depth == depth) {
-    return;
-  }
-  // Kraken keeps one book per pair, so another depth is dropped first.
-  UnsubscribeLocked(symbol);
-
+  // Again: another call may have taken them during the round trip.
+  ThrowIfTakenLocked(id, symbol);
   const auto subscription =
       subscriptions_
-          .emplace(symbol, Subscription{.depth = depth,
-                                        .receiver = make_receiver(precision)})
+          .emplace(id, Subscription{.symbol = symbol,
+                                    .depth = depth,
+                                    .receiver = make_receiver(precision)})
           .first;
   try {
     // The parser knows where the messages go before the venue sends any.
@@ -117,9 +119,37 @@ void VenueManager::SubscribeImpl(const std::string& symbol,
   }
 }
 
-void VenueManager::Unsubscribe(std::string_view symbol) {
+void VenueManager::Unsubscribe(SubscriptionId id) {
   const std::scoped_lock lock{life_cycle_mutex_};
-  UnsubscribeLocked(symbol);
+  const auto subscription = subscriptions_.find(id);
+  if (subscription == subscriptions_.end()) {
+    return;
+  }
+  const Subscription& removed = subscription->second;
+  // Frames already in flight are ignored from here on, so the receiver can go.
+  parser_.Detach(removed.symbol);
+  if (connected_) {
+    feed_.Send(BuildBookRequest(SubscriptionMethod::kUnsubscribe,
+                                removed.symbol, removed.depth));
+  }
+  subscriptions_.erase(subscription);
+}
+
+void VenueManager::ThrowIfTakenLocked(SubscriptionId id,
+                                      std::string_view symbol) const {
+  if (subscriptions_.contains(id)) {
+    throw std::invalid_argument{
+        std::format("Subscription id {} is already in use", id)};
+  }
+  const auto taken = std::ranges::find(
+      subscriptions_, symbol, [](const auto& entry) -> std::string_view {
+        return entry.second.symbol;
+      });
+  if (taken != subscriptions_.end()) {
+    throw std::invalid_argument{
+        std::format("{} is already subscribed to by subscription {}", symbol,
+                    taken->first)};
+  }
 }
 
 void VenueManager::DisconnectLocked() {
@@ -131,20 +161,6 @@ void VenueManager::DisconnectLocked() {
   // next connection.
   raw_frames_queue_.reset();
   connected_ = false;
-}
-
-void VenueManager::UnsubscribeLocked(std::string_view symbol) {
-  const auto subscription = subscriptions_.find(symbol);
-  if (subscription == subscriptions_.end()) {
-    return;
-  }
-  if (connected_) {
-    feed_.Send(BuildBookRequest(SubscriptionMethod::kUnsubscribe, symbol,
-                                subscription->second.depth));
-  }
-  // Frames already in flight are ignored from here on, so the receiver can go.
-  parser_.Detach(symbol);
-  subscriptions_.erase(subscription);
 }
 
 }  // namespace kraken

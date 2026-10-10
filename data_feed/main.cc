@@ -24,10 +24,10 @@ int main() {
   try {
     kraken::VenueManager kraken_manager;
     kraken_manager.Connect();
-    kraken_manager.Subscribe<l2::FileWriter>(/*symbol=*/"BTC/USD",
-                                             /*depth*/ 100);
-    kraken_manager.Subscribe<frontend::Transmitter>(/*symbol=*/"ETH/USD",
-                                                    /*depth*/ 100);
+    kraken_manager.Subscribe<l2::FileWriter>(
+        /*id=*/1, /*symbol=*/"BTC/USD", /*depth=*/100);
+    kraken_manager.Subscribe<frontend::Transmitter>(
+        /*id=*/2, /*symbol=*/"ETH/USD", /*depth=*/100);
 
     while (!stop_requested && !kraken_manager.failed()) {
       std::this_thread::sleep_for(std::chrono::milliseconds(100));

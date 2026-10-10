@@ -60,8 +60,10 @@ std::vector<unsigned char> Base64Decode(std::string_view input) {
     throw std::runtime_error("Failed to base64-decode API secret");
   }
 
+  // EVP_DecodeBlock counts padding as zero bytes. Counted on the trimmed text,
+  // so noise after the padding (e.g. a trailing newline) does not hide it.
   std::size_t length = static_cast<std::size_t>(decoded);
-  for (auto it = input.rbegin(); it != input.rend() && *it == '='; ++it) {
+  for (auto it = trimmed.rbegin(); it != trimmed.rend() && *it == '='; ++it) {
     --length;
   }
 

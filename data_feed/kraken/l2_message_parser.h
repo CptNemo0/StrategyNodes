@@ -20,8 +20,9 @@ namespace kraken {
 // Turns frames from Kraken's "book" channel into l2::Messages on its own
 // thread and hands each to the receiver attached for its pair. Other frames
 // (heartbeat, status, acknowledgements) and pairs with no receiver are
-// ignored. Prices and quantities are scaled to fixed-point integers using the
-// precision given at Attach().
+// ignored. A book frame missing a field it needs fails the pipeline, as its
+// layout is no longer the one this parser knows. Prices and quantities are
+// scaled to fixed-point integers using the precision given at Attach().
 //
 // Start() and Stop() may alternate any number of times. Attach() and Detach()
 // are safe to call from any thread while it runs.
@@ -43,22 +44,25 @@ class L2MessageParser {
   // pushed before the call is parsed. Does nothing while stopped.
   void Stop();
 
-  // Routes the messages of `symbol` to `receiver` from now on, replacing any
-  // previous receiver. `receiver` must stay alive until Detach().
+  // Routes the messages of `symbol` to `receiver` from now on, scaled at
+  // `precision`. Its stream starts with the pair's next snapshot. Throws if
+  // `symbol` already has a receiver. `receiver` must stay alive until
+  // Detach().
   void Attach(const std::string& symbol,
               const l2::PairPrecision& precision,
               core::Receiver<l2::Message>& receiver);
 
-  // Ignores the messages of `symbol` from now on. Once it returns, the
-  // detached receiver is never called again and may be destroyed.
+  // Stops routing the messages of `symbol`. Once it returns, its receiver is
+  // never called again and may be destroyed. Unknown symbols are ignored.
   void Detach(std::string_view symbol);
 
  private:
   struct Route {
     l2::PairPrecision precision;
+    // Never null.
     core::Receiver<l2::Message>* receiver;
-    // Updates are dropped until the pair's snapshot arrives, so every
-    // receiver's stream starts with a snapshot.
+    // Updates are dropped until the pair's snapshot arrives, so the
+    // receiver's stream starts with one.
     bool awaiting_snapshot{true};
   };
 

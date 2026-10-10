@@ -21,9 +21,6 @@ inline constexpr std::string_view kWsL3Endpoint = "wss://ws-l3.kraken.com/v2";
 
 inline constexpr std::string_view kHttpsPort = "443";
 
-// 15 minutes
-inline constexpr double kWebsocketTokenExpirationTime = 15;
-
 inline constexpr std::string_view kWsL2Host = "ws.kraken.com";
 
 inline constexpr std::string_view kWsL2Target = "/v2";

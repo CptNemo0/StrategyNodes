@@ -4,8 +4,11 @@
 #include <rapidjson/reader.h>
 
 #include <charconv>
+#include <format>
 #include <mutex>
+#include <optional>
 #include <ranges>
+#include <stdexcept>
 #include <stop_token>
 #include <string>
 #include <string_view>
@@ -27,38 +30,99 @@ namespace kraken {
 
 namespace {
 
-std::vector<l2::Message::Level> ParseSide(const rapidjson::Value& side,
+using IsKind = bool (rapidjson::Value::*)() const;
+
+// The member `name` of `object`, if `object` is an object that has it.
+std::optional<rapidjson::Value::ConstMemberIterator> FindMember(
+    const rapidjson::Value& object,
+    std::string_view name) {
+  if (!object.IsObject()) {
+    return std::nullopt;
+  }
+  const rapidjson::Value::ConstMemberIterator member =
+      object.FindMember(rapidjson::StringRef(
+          name.data(), static_cast<rapidjson::SizeType>(name.size())));
+  return member == object.MemberEnd() ? std::nullopt : std::optional{member};
+}
+
+// Thrown rather than letting rapidjson assert, so a frame whose layout Kraken
+// changed fails the pipeline instead of aborting the process.
+std::runtime_error MalformedField(std::string_view name) {
+  return std::runtime_error{std::format(
+      R"(Malformed Kraken book frame: missing or mistyped "{}")", name)};
+}
+
+// The member `name` of `object`, which must be of the kind `is_kind` checks
+// for.
+const rapidjson::Value& Require(const rapidjson::Value& object,
+                                std::string_view name,
+                                IsKind is_kind) {
+  const std::optional<rapidjson::Value::ConstMemberIterator> member =
+      FindMember(object, name);
+  if (!member || !((*member)->value.*is_kind)()) {
+    throw MalformedField(name);
+  }
+  return (*member)->value;
+}
+
+// The text of the optional member `name` of `object`, which must be a
+// string if present.
+std::optional<std::string_view> FindString(const rapidjson::Value& object,
+                                           std::string_view name) {
+  return FindMember(object, name)
+      .transform([name](rapidjson::Value::ConstMemberIterator member) {
+        if (!member->value.IsString()) {
+          throw MalformedField(name);
+        }
+        return std::string_view{member->value.GetString(),
+                                member->value.GetStringLength()};
+      });
+}
+
+// Numbers arrive as strings because of kParseNumbersAsStringsFlag below.
+i64 ParseScaled(const rapidjson::Value& level,
+                std::string_view name,
+                u32 decimals) {
+  return core::ScaleDecimalStringToI64(
+      Require(level, name, &rapidjson::Value::IsString).GetString(), decimals);
+}
+
+std::vector<l2::Message::Level> ParseSide(const rapidjson::Value& data,
+                                          std::string_view name,
                                           const l2::PairPrecision& precision) {
-  return side.GetArray() |
+  return Require(data, name, &rapidjson::Value::IsArray).GetArray() |
          std::views::transform([&precision](const rapidjson::Value& level) {
            return l2::Message::Level{
-               .price = core::ScaleDecimalStringToI64(
-                   level["price"].GetString(), precision.price_decimals),
-               .quantity = core::ScaleDecimalStringToI64(
-                   level["qty"].GetString(), precision.qty_decimals)};
+               .price = ParseScaled(level, "price", precision.price_decimals),
+               .quantity = ParseScaled(level, "qty", precision.qty_decimals)};
          }) |
          std::ranges::to<std::vector>();
 }
 
 // Kraken's checksum exceeds the range of an i32 (e.g. 2520196449), so it is
-// read as a u32. Numbers arrive as strings because of
-// kParseNumbersAsStringsFlag below.
+// read as a u32.
 u32 ParseChecksum(const rapidjson::Value& data) {
-  if (!data.HasMember("checksum")) {
-    return 0;
-  }
-
-  const std::string_view text = data["checksum"].GetString();
+  const std::string_view text = FindString(data, "checksum").value_or("");
   u32 checksum{0};
   std::from_chars(text.data(), text.data() + text.size(), checksum);
   return checksum;
 }
 
 i64 ParseVenueTime(const rapidjson::Value& data) {
-  return data.HasMember("timestamp")
-             ? core::ParseIso8601ToUnixNanos(data["timestamp"].GetString())
-                   .value_or(0)
-             : 0;
+  return FindString(data, "timestamp")
+      .and_then(core::ParseIso8601ToUnixNanos)
+      .value_or(0);
+}
+
+// The single entry of a book frame's "data" array.
+const rapidjson::Value& BookData(const rapidjson::Value& document) {
+  const rapidjson::Value& data =
+      Require(document, "data", &rapidjson::Value::IsArray);
+  if (data.Empty() || !data[0].IsObject()) {
+    throw std::runtime_error{
+        R"(Malformed Kraken book frame: "data" holds no object)"};
+  }
+  return data[0];
 }
 
 }  // namespace
@@ -91,13 +155,21 @@ void L2MessageParser::Attach(const std::string& symbol,
                              const l2::PairPrecision& precision,
                              core::Receiver<l2::Message>& receiver) {
   const std::scoped_lock lock{routes_mutex_};
-  routes_.insert_or_assign(
-      symbol, Route{.precision = precision, .receiver = &receiver});
+  if (!routes_
+           .try_emplace(symbol,
+                        Route{.precision = precision, .receiver = &receiver})
+           .second) {
+    throw std::invalid_argument{
+        std::format("{} already has a receiver", symbol)};
+  }
 }
 
 void L2MessageParser::Detach(std::string_view symbol) {
   const std::scoped_lock lock{routes_mutex_};
-  routes_.erase(symbol);
+  const auto route = routes_.find(symbol);
+  if (route != routes_.end()) {
+    routes_.erase(route);
+  }
 }
 
 void L2MessageParser::Dispatch(const net::RawFrame& frame) {
@@ -112,9 +184,13 @@ void L2MessageParser::Dispatch(const net::RawFrame& frame) {
     return;
   }
 
-  const rapidjson::Value& data = document["data"][0];
-  std::string symbol = data["symbol"].GetString();
-  const bool is_snapshot = document["type"] == "snapshot";
+  const rapidjson::Value& data = BookData(document);
+  std::string symbol =
+      Require(data, "symbol", &rapidjson::Value::IsString).GetString();
+  const bool is_snapshot =
+      std::string_view{
+          Require(document, "type", &rapidjson::Value::IsString).GetString()} ==
+      "snapshot";
 
   const std::scoped_lock lock{routes_mutex_};
   const auto route = routes_.find(symbol);
@@ -137,8 +213,8 @@ void L2MessageParser::Dispatch(const net::RawFrame& frame) {
                   .venue_time_ns = ParseVenueTime(data),
                   .capture_time_ns = frame.capture_time_ns,
                   .symbol = std::move(symbol),
-                  .buys = ParseSide(data["bids"], precision),
-                  .sells = ParseSide(data["asks"], precision)});
+                  .buys = ParseSide(data, "bids", precision),
+                  .sells = ParseSide(data, "asks", precision)});
 }
 
 }  // namespace kraken

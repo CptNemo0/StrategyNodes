@@ -3,7 +3,6 @@
 
 #include <concepts>
 #include <flat_map>
-#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -29,6 +28,9 @@ namespace kraken {
 // their threads share. Wires a receiver between them for each subscription.
 // Construction loads the credentials from the environment.
 //
+// Kraken streams a pair at one depth per connection, so a pair has at most one
+// subscription: sharing it would force every receiver onto one depth.
+//
 // Every public method may be called any number of times, in any order and from
 // any thread; each leaves the manager either fully connected or fully
 // disconnected, and each subscription either fully set up or fully torn down,
@@ -36,6 +38,10 @@ namespace kraken {
 // on every Connect(). Destruction disconnects and drops every subscription.
 class VenueManager {
  public:
+  // Identifies a subscription across every venue, so it is chosen by the
+  // caller.
+  using SubscriptionId = u64;
+
   VenueManager();
 
   VenueManager(const VenueManager&) = delete;
@@ -52,34 +58,35 @@ class VenueManager {
   // Subscriptions are kept. Does nothing while disconnected.
   void Disconnect();
 
-  // Streams `symbol`'s (e.g. "BTC/USD") book at `depth`, which must be one of
-  // kL2Depths, into a new `ReceiverT`. Replaces any subscription to the pair
-  // at another depth. Fetches the pair's precision from the venue, so it
-  // blocks for a REST round trip.
-  template <typename ReceiverT = l2::FileWriter>
+  // Streams `symbol`'s (e.g. "BTC/USD") book into a new `ReceiverT` under
+  // `id`, starting with a snapshot. `depth` must be one of kL2Depths. Throws if
+  // `id` is in use or `symbol` already has a subscription. Fetches the pair's
+  // precision from the venue, so it blocks for a REST round trip.
+  template <typename ReceiverT>
     requires core::ReceiverOf<ReceiverT, l2::Message> &&
              std::constructible_from<ReceiverT,
                                      std::string_view,
                                      const std::string&,
                                      u32,
                                      const l2::PairPrecision&>
-  void Subscribe(const std::string& symbol, u64 depth) {
-    SubscribeImpl(symbol, depth, [&](const l2::PairPrecision& precision) {
+  void Subscribe(SubscriptionId id, const std::string& symbol, u64 depth) {
+    SubscribeImpl(id, symbol, depth, [&](const l2::PairPrecision& precision) {
       return std::make_unique<ReceiverT>(kVenueName, symbol,
                                          static_cast<u32>(depth), precision);
     });
   }
 
-  // Drops the pair's subscription and closes its recording. Unknown pairs are
-  // ignored.
-  void Unsubscribe(std::string_view symbol);
+  // Drops the subscription and its receiver, closing a recording, and
+  // unsubscribes from its pair. Unknown ids are ignored.
+  void Unsubscribe(SubscriptionId id);
 
   // Whether the feed or the parser died since the last Connect().
   bool failed() const { return status_.failed; }
 
  private:
-  // What Kraken streams for one pair, and who it goes to.
+  // The one subscriber to a pair.
   struct Subscription {
+    std::string symbol;
     u64 depth;
     std::unique_ptr<core::Receiver<l2::Message>> receiver;
   };
@@ -90,13 +97,16 @@ class VenueManager {
           const l2::PairPrecision&)>;
 
   // Subscribe() for any receiver type.
-  void SubscribeImpl(const std::string& symbol,
+  void SubscribeImpl(SubscriptionId id,
+                     const std::string& symbol,
                      u64 depth,
                      ReceiverFactory make_receiver);
 
-  // Disconnect() and Unsubscribe() without the lock.
+  // Throws if `id` is in use or `symbol` already has a subscription.
+  void ThrowIfTakenLocked(SubscriptionId id, std::string_view symbol) const;
+
+  // Disconnect() without the lock.
   void DisconnectLocked();
-  void UnsubscribeLocked(std::string_view symbol);
 
   // Serializes every public method but failed().
   mutable std::mutex life_cycle_mutex_;
@@ -104,8 +114,8 @@ class VenueManager {
   WebsocketTokenGenerator signer_;
   core::PipelineStatus status_;
   net::RawFrameQueue raw_frames_queue_;
-  // Declared before the parser, which points into them, so they outlive it.
-  std::flat_map<std::string, Subscription, std::less<>> subscriptions_;
+  // Declared before the parser, which points into it, so it outlives it.
+  std::flat_map<SubscriptionId, Subscription> subscriptions_;
   L2MessageParser parser_;
   // Declared last so it is destroyed first: it feeds the parser.
   net::WebsocketFeed feed_;
