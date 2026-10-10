@@ -21,7 +21,7 @@
 #include "l2_feed_loop.h"
 #include "l2_kraken_data_feed.h"
 #include "l2_message_dispatcher.h"
-#include "l2_message_writer_lane.h"
+#include "l2_message_file_writer.h"
 #include "pipeline_status.h"
 
 namespace {
@@ -57,17 +57,17 @@ int main() {
                                                           symbol_depth_mapping);
 
     // Declared before the parser so the parser joins first and every message
-    // it dispatched reaches a still running lane.
-    const data_feed::WriterLaneMap lanes =
+    // it dispatched reaches a still running writer.
+    const data_feed::FileWriterMap writers =
         symbol_depth_mapping |
         std::views::transform([&pair_precision](const auto& entry) {
           const auto& [symbol, depth] = entry;
           return std::pair{
               symbol,
-              std::make_unique<data_feed::L2MessageWriterLane>(
+              std::make_unique<data_feed::L2MessageFileWriter>(
                   symbol, static_cast<u32>(depth), pair_precision.at(symbol))};
         }) |
-        std::ranges::to<data_feed::WriterLaneMap>();
+        std::ranges::to<data_feed::FileWriterMap>();
 
     const std::unique_ptr<data_feed::FrameQueue> frames =
         std::make_unique<data_feed::FrameQueue>();
@@ -80,16 +80,17 @@ int main() {
 
     feed->Connect();
 
-    // Declared after the queue and lanes so it is joined before they die.
-    const std::jthread parser{[&frames, &lanes,
-                               &pair_precision](const std::stop_token& stop) {
-      data_feed::ParseAndDispatch(stop, *frames, lanes, pair_precision, status);
-    }};
+    // Declared after the queue and writers so it is joined before they die.
+    const std::jthread parser{
+        [&frames, &writers, &pair_precision](const std::stop_token& stop) {
+          data_feed::ParseAndDispatch(stop, *frames, writers, pair_precision,
+                                      status);
+        }};
 
     // Declared last so it joins first: the network loop must stop producing
     // frames before the parser (and its queue) are torn down.
-    const std::jthread network{[&feed, &frames, &lanes, &output] {
-      data_feed::RunL2FeedLoop(*feed, *frames, lanes, output, status);
+    const std::jthread network{[&feed, &frames, &writers, &output] {
+      data_feed::RunL2FeedLoop(*feed, *frames, writers, output, status);
     }};
 
     while (!status.stop_requested) {

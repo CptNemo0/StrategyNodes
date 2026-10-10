@@ -14,21 +14,21 @@ namespace data_feed {
 
 void ParseAndDispatch(const std::stop_token& stop,
                       FrameQueue& frames,
-                      const WriterLaneMap& lanes,
+                      const FileWriterMap& writers,
                       const PairPrecisionMap& precision,
                       PipelineStatus& status) {
   Drain(
       stop, "parser", frames,
-      [&lanes, &precision](const RawFrame& frame) {
+      [&writers, &precision](const RawFrame& frame) {
         std::optional<L2Message> message =
             ParseKrakenL2Message(frame.json, frame.capture_time_ns, precision);
         if (!message) {
           return;
         }
-        const auto lane = lanes.find(message->symbol);
-        if (lane != lanes.end()) {
-          PushBlocking(lane->second->queue(), std::move(*message),
-                       lane->second->failed());
+        const auto writer = writers.find(message->symbol);
+        if (writer != writers.end()) {
+          PushBlocking(writer->second->queue(), std::move(*message),
+                       writer->second->failed());
         }
       },
       [&status] { status.Fail(); });

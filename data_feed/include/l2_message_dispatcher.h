@@ -12,7 +12,7 @@
 #include "aliasing.h"
 #include "constants.h"
 #include "kraken_pair_precision.h"
-#include "l2_message_writer_lane.h"
+#include "l2_message_file_writer.h"
 #include "pipeline_status.h"
 
 namespace data_feed {
@@ -31,14 +31,14 @@ using FrameQueue =
     boost::lockfree::spsc_queue<RawFrame,
                                 boost::lockfree::capacity<kMaxQueuedFrames>>;
 
-using WriterLaneMap = std::
-    flat_map<std::string, std::unique_ptr<L2MessageWriterLane>, std::less<>>;
+using FileWriterMap = std::
+    flat_map<std::string, std::unique_ptr<L2MessageFileWriter>, std::less<>>;
 
 // Parser thread body: parses frames into L2Messages and routes each to the
-// lane of its symbol until stop is requested and `frames` is empty.
+// writer of its symbol until stop is requested and `frames` is empty.
 void ParseAndDispatch(const std::stop_token& stop,
                       FrameQueue& frames,
-                      const WriterLaneMap& lanes,
+                      const FileWriterMap& writers,
                       const PairPrecisionMap& precision,
                       PipelineStatus& status);
 

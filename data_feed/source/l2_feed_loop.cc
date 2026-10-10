@@ -1,11 +1,15 @@
 #include "l2_feed_loop.h"
 
 #include <flat_set>
+#include <fstream>
 #include <print>
 #include <string>
 #include <utility>
 
 #include "aliasing.h"
+#include "l2_kraken_data_feed.h"
+#include "l2_message_dispatcher.h"
+#include "pipeline_status.h"
 #include "spsc_util.h"
 #include "utility.h"
 
@@ -13,18 +17,19 @@ namespace data_feed {
 
 void RunL2FeedLoop(Level2KrakenDataFeed& feed,
                    FrameQueue& frames,
-                   const WriterLaneMap& lanes,
+                   const FileWriterMap& writers,
                    std::ofstream& output,
                    PipelineStatus& status) {
   std::flat_set<std::string> unsubscribed;
 
   // Heartbeats arrive every second, so the flag is checked regularly.
   while (!status.stop_requested) {
-    // A lane failure only kills that pair's lane (see L2MessageWriterLane);
-    // unsubscribing here is what actually stops the feed sending it data.
-    for (const auto& [symbol, lane] : lanes) {
-      if (lane->failed() && !unsubscribed.contains(symbol)) {
-        std::println("Lane for {} failed; unsubscribing", symbol);
+    // A writer failure only kills that pair's writer (see
+    // L2MessageFileWriter); unsubscribing here is what actually stops the feed
+    // sending it data.
+    for (const auto& [symbol, writer] : writers) {
+      if (writer->failed() && !unsubscribed.contains(symbol)) {
+        std::println("Writer for {} failed; unsubscribing", symbol);
         feed.Unsubscribe(symbol);
         unsubscribed.insert(symbol);
       }
