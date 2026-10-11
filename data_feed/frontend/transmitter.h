@@ -1,32 +1,32 @@
 #ifndef DATA_FEED_FRONTEND_TRANSMITTER_H_
 #define DATA_FEED_FRONTEND_TRANSMITTER_H_
 
+#include <memory>
 #include <string>
 #include <string_view>
 
 #include "core/aliasing.h"
 #include "core/receiver.h"
+#include "frontend/outbox.h"
+#include "frontend/stream.h"
 #include "l2/message.h"
 #include "l2/pair_precision.h"
+#include "venue/manager.h"
 
 namespace frontend {
 
-// Local websocket endpoint the TypeScript frontend subscribes to; must match
-// the default VITE_FEED_URL in frontend/src/App.tsx.
-inline constexpr u16 kStreamPort = 8765;
-
-// Streams the l2::Messages of a single pair to the frontend. Not implemented
-// yet: every message is dropped.
+// The receiver of one live subscription: feeds its messages, and every gap
+// in them, into the subscription's Stream, which sends them to every client
+// watching.
 //
-// Shares the venue's stream of the pair with every other subscription to it,
-// so it must adapt to what it gets: the stream may be deeper or shallower
-// than `depth` (a recording dictates it), it may start with updates rather
-// than a snapshot when the pair was already streaming, and a snapshot may
-// arrive at any time when the venue's depth changes.
+// Registers the Stream with the Outbox under `id` for its whole lifetime, so
+// the Server can find it by the id a Watch names.
 class Transmitter : public core::Receiver<l2::Message> {
  public:
-  // Same arguments as l2::FileWriter, so either can back a subscription.
-  Transmitter(std::string_view venue,
+  // `outbox` must outlive the transmitter.
+  Transmitter(Outbox& outbox,
+              venue::SubscriptionId id,
+              std::string_view venue,
               const std::string& symbol,
               u32 depth,
               const l2::PairPrecision& precision);
@@ -34,9 +34,18 @@ class Transmitter : public core::Receiver<l2::Message> {
   Transmitter(const Transmitter&) = delete;
   Transmitter& operator=(const Transmitter&) = delete;
 
-  ~Transmitter() override = default;
+  // Unregisters, so no client starts watching once it returns.
+  ~Transmitter() override;
 
+  // Runs on the parser thread.
   void Receive(l2::Message message) override;
+
+  void OnGap(core::Gap gap) override;
+
+ private:
+  Outbox& outbox_;
+  const venue::SubscriptionId id_;
+  const std::shared_ptr<Stream> stream_;
 };
 
 }  // namespace frontend

@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
+#include <condition_variable>
 #include <exception>
 #include <expected>
 #include <format>
@@ -10,8 +12,10 @@
 #include <optional>
 #include <ranges>
 #include <stdexcept>
+#include <stop_token>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -31,6 +35,10 @@ namespace kraken {
 namespace {
 
 constexpr std::string_view kRawLogStem = "kraken_l2_messages";
+
+// The least time between two resubscribes of one pair, so a pair whose
+// checksum keeps failing does not flood the venue with requests.
+constexpr std::chrono::seconds kMinResubscribeInterval{1};
 
 enum class SubscriptionMethod { kSubscribe, kUnsubscribe };
 
@@ -67,13 +75,19 @@ std::expected<l2::PairPrecision, venue::Error> FetchPrecision(
 VenueManager::VenueManager()
     : credentials_{Credentials::FromEnvironment()},
       signer_{*credentials_},
-      parser_{raw_frames_queue_, status_},
+      parser_{raw_frames_queue_, status_,
+              [this](std::string_view symbol) { RequestResubscribe(symbol); }},
       feed_{net::WebsocketFeed::Endpoints{.host = std::string{kWsL2Host},
                                           .port = std::string{kHttpsPort},
                                           .target = std::string{kWsL2Target}},
-            std::string{kRawLogStem}, raw_frames_queue_, status_} {}
+            std::string{kRawLogStem}, raw_frames_queue_, status_},
+      resubscriber_{
+          [this](const std::stop_token& stop) { ResubscribeQueued(stop); }} {}
 
 VenueManager::~VenueManager() {
+  // First, so it does not resubscribe on a connection being torn down.
+  resubscriber_.request_stop();
+  resubscriber_.join();
   const std::scoped_lock lock{life_cycle_mutex_};
   DisconnectLocked();
 }
@@ -153,7 +167,7 @@ std::expected<venue::SubscriptionId, venue::Error> VenueManager::Subscribe(
           .first;
   try {
     // The parser knows where the messages go before the venue sends any.
-    parser_.Attach(symbol, *precision, *subscription->second.receiver);
+    parser_.Attach(symbol, *precision, depth, *subscription->second.receiver);
   } catch (...) {
     subscriptions_.erase(subscription);
     throw;
@@ -165,7 +179,8 @@ std::expected<venue::SubscriptionId, venue::Error> VenueManager::Subscribe(
 }
 
 std::expected<void, venue::Error> VenueManager::Unsubscribe(
-    venue::SubscriptionId id) {
+    venue::SubscriptionId id,
+    venue::Sink sink) {
   const std::scoped_lock lock{life_cycle_mutex_};
   const auto subscription = subscriptions_.find(id);
   if (subscription == subscriptions_.end()) {
@@ -173,6 +188,12 @@ std::expected<void, venue::Error> VenueManager::Unsubscribe(
                                      std::format("No subscription {}", id))};
   }
   const Subscription& removed = subscription->second;
+  if (removed.sink != sink) {
+    return std::unexpected{MakeError(
+        venue::Error::Code::kSinkMismatch,
+        std::format("Subscription {} is {}, not {}", id,
+                    venue::SinkName(removed.sink), venue::SinkName(sink)))};
+  }
   // Frames already in flight are ignored from here on, so the receiver can go.
   parser_.Detach(removed.symbol);
   if (connected_) {
@@ -226,6 +247,63 @@ VenueManager::ResolveTakenLocked(venue::SubscriptionId id,
                   symbol, taken->first, existing.depth))};
 }
 
+void VenueManager::RequestResubscribe(std::string_view symbol) {
+  {
+    const std::scoped_lock lock{resubscribe_mutex_};
+    if (std::ranges::contains(pending_resubscribes_, symbol)) {
+      return;
+    }
+    pending_resubscribes_.emplace_back(symbol);
+  }
+  resubscribe_wake_.notify_one();
+}
+
+void VenueManager::ResubscribeQueued(const std::stop_token& stop) {
+  // When each pair was last resubscribed.
+  std::flat_map<std::string, std::chrono::steady_clock::time_point, std::less<>>
+      last_resubscribed;
+  std::unique_lock lock{resubscribe_mutex_};
+  while (resubscribe_wake_.wait(
+      lock, stop, [this] { return !pending_resubscribes_.empty(); })) {
+    const std::string symbol = std::move(pending_resubscribes_.front());
+    pending_resubscribes_.erase(pending_resubscribes_.begin());
+    if (const auto last = last_resubscribed.find(symbol);
+        last != last_resubscribed.end()) {
+      // Waits out the interval, waking early only to stop.
+      resubscribe_wake_.wait_until(lock, stop,
+                                   last->second + kMinResubscribeInterval,
+                                   [] { return false; });
+      if (stop.stop_requested()) {
+        return;
+      }
+    }
+    // Not held while waiting on the life cycle lock, so the parser can
+    // always queue another pair.
+    lock.unlock();
+    Resubscribe(symbol);
+    last_resubscribed.insert_or_assign(symbol,
+                                       std::chrono::steady_clock::now());
+    lock.lock();
+  }
+}
+
+void VenueManager::Resubscribe(std::string_view symbol) {
+  const std::scoped_lock lock{life_cycle_mutex_};
+  const auto subscription = std::ranges::find(
+      subscriptions_, symbol, [](const auto& entry) -> std::string_view {
+        return entry.second.symbol;
+      });
+  if (!connected_ || subscription == subscriptions_.end()) {
+    return;
+  }
+  // Kraken handles the two in order, so the pair's next frame is the new
+  // subscription's snapshot; the parser drops its updates until then.
+  feed_.Send(BuildBookRequest(SubscriptionMethod::kUnsubscribe, symbol,
+                              subscription->second.depth));
+  feed_.Send(BuildBookRequest(SubscriptionMethod::kSubscribe, symbol,
+                              subscription->second.depth));
+}
+
 void VenueManager::DisconnectLocked() {
   // The feed goes first: it pushes into the frame queue until it stops, and
   // the parser drains that queue before it stops.
@@ -234,6 +312,13 @@ void VenueManager::DisconnectLocked() {
   // Only non-empty if the parser died mid-way; such frames are stale for the
   // next connection.
   raw_frames_queue_.reset();
+  // The parser has stopped, so no Receive() runs alongside. Only a connection
+  // that was up ends: a failed attempt to connect carried no messages.
+  if (connected_) {
+    for (const Subscription& subscription : subscriptions_.values()) {
+      subscription.receiver->OnGap(core::Gap::kDisconnected);
+    }
+  }
   connected_ = false;
 }
 

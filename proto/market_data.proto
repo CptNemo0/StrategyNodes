@@ -66,7 +66,7 @@ message Level {
 // receives a Book for an unknown stream_id must drop it rather than guess a
 // scale.
 message StreamInfo {
-  uint32 stream_id = 1;
+  uint64 stream_id = 1;
   string symbol = 2;
   string venue = 3;
   // Book depth subscribed to at the venue.
@@ -91,7 +91,7 @@ message Book {
     KIND_DELTA = 2;
   }
 
-  uint32 stream_id = 1;
+  uint64 stream_id = 1;
   Kind kind = 2;
   // Best first.
   repeated Level bids = 3;
@@ -109,6 +109,12 @@ message Book {
 // Health of the backend's connection to the venue, so the frontend can
 // distinguish a quiet market from a broken feed, and can show a pair that was
 // dropped because its writer lane failed.
+//
+// Sent to the watchers of a stream when a gap opens in it: DISCONNECTED when
+// the venue connection dropped, DEGRADED when the pair is being resubscribed
+// because its book stopped matching the venue's checksum. Either way, drop
+// the book; a snapshot ends the gap, and LIVE, naming the stream, comes just
+// before it.
 message FeedStatus {
   enum State {
     STATE_UNSPECIFIED = 0;
@@ -123,7 +129,7 @@ message FeedStatus {
   // Free text for the UI; never parsed.
   string detail = 2;
   // Streams currently subscribed and healthy.
-  repeated uint32 healthy_stream_ids = 3;
+  repeated uint64 healthy_stream_ids = 3;
 }
 
 // Sent when nothing else has gone out recently, so a client can tell an idle

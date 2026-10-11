@@ -29,6 +29,11 @@ enum class Sink : u8 {
   kRecord,
 };
 
+// "a live feed" or "a recording", for error details.
+constexpr std::string_view SinkName(Sink sink) {
+  return sink == Sink::kRecord ? "a recording" : "a live feed";
+}
+
 // One subscription, as listed to the frontend.
 struct SubscriptionInfo {
   SubscriptionId id;
@@ -98,8 +103,13 @@ class Manager {
       Sink sink,
       ReceiverFactory make_receiver) = 0;
 
-  // Drops the subscription and its receiver, closing a recording.
-  virtual std::expected<void, Error> Unsubscribe(SubscriptionId id) = 0;
+  // Drops the subscription and its receiver, closing a recording. Fails with
+  // kUnknownId if no subscription has `id`, or kSinkMismatch if it has
+  // another sink than `sink`, so that a command meant for a recording cannot
+  // stop a live feed. Checked under the same lock Subscribe() resolves an
+  // existing recording under, so the two cannot interleave.
+  virtual std::expected<void, Error> Unsubscribe(SubscriptionId id,
+                                                 Sink sink) = 0;
 
   // Every subscription, ordered by id.
   virtual std::vector<SubscriptionInfo> List() const = 0;

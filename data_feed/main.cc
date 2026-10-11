@@ -3,14 +3,13 @@
 #include <csignal>
 #include <cstdio>
 #include <exception>
-#include <expected>
 #include <memory>
 #include <print>
-#include <string>
 #include <thread>
 #include <utility>
 
-#include "core/aliasing.h"
+#include "frontend/outbox.h"
+#include "frontend/server.h"
 #include "kraken/venue_manager.h"
 #include "venue/manager.h"
 #include "venue/router.h"
@@ -21,21 +20,6 @@ namespace {
 // connected; this only tells main to tear them down.
 std::atomic<bool> stop_requested{false};
 
-// Stands in for the frontend's commands until the server exists.
-template <venue::Sink sink>
-void SubscribeOrReport(venue::Router& router,
-                       const std::string& symbol,
-                       u32 depth) {
-  const std::expected<venue::SubscriptionId, venue::Error> subscribed =
-      router.Subscribe<sink>(venue::Id::kKraken, symbol, depth);
-  if (subscribed) {
-    std::println("Subscription {}: {}@{}", *subscribed, symbol, depth);
-  } else {
-    std::println(stderr, "Cannot subscribe to {}@{}: {}", symbol, depth,
-                 subscribed.error().detail);
-  }
-}
-
 }  // namespace
 
 int main() {
@@ -45,10 +29,13 @@ int main() {
     venue::Router::Managers managers;
     managers.emplace(venue::Id::kKraken,
                      std::make_unique<kraken::VenueManager>());
-    venue::Router router{std::move(managers)};
-
-    SubscribeOrReport<venue::Sink::kRecord>(router, "BTC/USD", /*depth=*/100);
-    SubscribeOrReport<venue::Sink::kLive>(router, "ETH/USD", /*depth=*/100);
+    // Declared in this order, so the server, which calls the router, goes
+    // first, and the outbox, which every live subscription registers with,
+    // goes last.
+    frontend::Outbox outbox;
+    venue::Router router{std::move(managers), outbox};
+    const frontend::Server server{router, outbox, frontend::ServerAddress{}};
+    std::println("Frontend server listening on port {}", server.port());
 
     while (!stop_requested) {
       std::this_thread::sleep_for(std::chrono::milliseconds(100));

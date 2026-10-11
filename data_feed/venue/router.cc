@@ -15,12 +15,12 @@
 #include <stop_token>
 #include <string>
 #include <string_view>
-#include <type_traits>
 #include <utility>
 #include <vector>
 
 #include "core/aliasing.h"
 #include "core/receiver.h"
+#include "frontend/outbox.h"
 #include "frontend/transmitter.h"
 #include "l2/file_writer.h"
 #include "l2/message.h"
@@ -34,26 +34,30 @@ namespace {
 // How often the supervisor checks whether a venue needs reconnecting.
 constexpr std::chrono::milliseconds kSupervisePeriod{100};
 
-std::string_view SinkName(Sink sink) {
-  return sink == Sink::kRecord ? "a recording" : "a live feed";
-}
-
-// Builds a `ReceiverT` for one subscription. FileWriter and Transmitter take
-// the same arguments, so either can back a subscription.
-template <typename ReceiverT>
-ReceiverFactory MakeReceiverFactory(std::string_view venue,
+// Builds the receiver of subscription `id`: a frontend::Transmitter bound to
+// `outbox` for kLive, an l2::FileWriter for kRecord.
+template <Sink sink>
+ReceiverFactory MakeReceiverFactory(frontend::Outbox& outbox,
+                                    SubscriptionId id,
+                                    std::string_view venue,
                                     const std::string& symbol,
                                     u32 depth) {
-  return [venue, symbol, depth](const l2::PairPrecision& precision)
+  return [&outbox, id, venue, symbol, depth](const l2::PairPrecision& precision)
              -> std::unique_ptr<core::Receiver<l2::Message>> {
-    return std::make_unique<ReceiverT>(venue, symbol, depth, precision);
+    if constexpr (sink == Sink::kRecord) {
+      return std::make_unique<l2::FileWriter>(venue, symbol, depth, precision);
+    } else {
+      return std::make_unique<frontend::Transmitter>(outbox, id, venue, symbol,
+                                                     depth, precision);
+    }
   };
 }
 
 }  // namespace
 
-Router::Router(Managers managers, Backoff backoff)
+Router::Router(Managers managers, frontend::Outbox& outbox, Backoff backoff)
     : managers_{std::move(managers)},
+      outbox_{outbox},
       backoff_{backoff},
       supervisor_{[this](const std::stop_token& stop) { Supervise(stop); }} {}
 
@@ -62,24 +66,17 @@ Router::~Router() = default;
 template <Sink sink>
 std::expected<SubscriptionId, Error>
 Router::Subscribe(Id venue, const std::string& symbol, u32 depth) {
-  using ReceiverT = std::conditional_t<sink == Sink::kRecord, l2::FileWriter,
-                                       frontend::Transmitter>;
   const auto manager = managers_.find(venue);
   if (manager == managers_.end()) {
     return std::unexpected{
         Error{.code = Error::Code::kUnknownVenue,
               .detail = std::format("No venue {}", std::to_underlying(venue))}};
   }
-  const std::string_view venue_name = manager->second->name();
-  return manager->second
-      ->Subscribe(next_id_++, symbol, depth, sink,
-                  MakeReceiverFactory<ReceiverT>(venue_name, symbol, depth))
-      .transform([&](SubscriptionId id) {
-        const std::scoped_lock lock{owners_mutex_};
-        // Already there if `id` is an existing recording's.
-        owners_.try_emplace(id, Owner{.venue = venue, .sink = sink});
-        return id;
-      });
+  const SubscriptionId id = next_id_++;
+  return manager->second->Subscribe(
+      id, symbol, depth, sink,
+      MakeReceiverFactory<sink>(outbox_, id, manager->second->name(), symbol,
+                                depth));
 }
 
 template std::expected<SubscriptionId, Error>
@@ -90,25 +87,16 @@ template std::expected<SubscriptionId, Error> Router::Subscribe<Sink::kRecord>(
     u32 depth);
 
 std::expected<void, Error> Router::Unsubscribe(SubscriptionId id, Sink sink) {
-  const std::scoped_lock lock{owners_mutex_};
-  const auto owner = owners_.find(id);
-  if (owner == owners_.end()) {
-    return std::unexpected{
-        Error{.code = Error::Code::kUnknownId,
-              .detail = std::format("No subscription {}", id)}};
+  for (const std::unique_ptr<Manager>& manager : managers_.values()) {
+    std::expected<void, Error> unsubscribed = manager->Unsubscribe(id, sink);
+    // Any other answer comes from the venue that has the id.
+    if (unsubscribed || unsubscribed.error().code != Error::Code::kUnknownId) {
+      return unsubscribed;
+    }
   }
-  if (owner->second.sink != sink) {
-    return std::unexpected{Error{
-        .code = Error::Code::kSinkMismatch,
-        .detail = std::format("Subscription {} is {}, not {}", id,
-                              SinkName(owner->second.sink), SinkName(sink))}};
-  }
-  std::expected<void, Error> unsubscribed =
-      managers_.at(owner->second.venue)->Unsubscribe(id);
-  // Gone either way: a manager that does not know the id streams nothing
-  // under it.
-  owners_.erase(owner);
-  return unsubscribed;
+  return std::unexpected{
+      Error{.code = Error::Code::kUnknownId,
+            .detail = std::format("No subscription {}", id)}};
 }
 
 std::vector<Router::Listing> Router::List() const {

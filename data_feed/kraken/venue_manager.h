@@ -1,13 +1,16 @@
 #ifndef DATA_FEED_KRAKEN_VENUE_MANAGER_H_
 #define DATA_FEED_KRAKEN_VENUE_MANAGER_H_
 
+#include <condition_variable>
 #include <expected>
 #include <flat_map>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <stop_token>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 #include "core/aliasing.h"
@@ -35,6 +38,12 @@ namespace kraken {
 // Construction does not connect; Connect() does, and the Router calls it
 // again whenever the manager is not healthy().
 //
+// The parser checks every pair's book against Kraken's checksum. A pair that
+// fails it is resubscribed on the live connection, unsubscribing and then
+// subscribing again for a fresh snapshot, by a thread of the manager's own,
+// so the parser never waits on the manager's lock. A pair that keeps failing
+// is resubscribed at most once per second.
+//
 // Every public method may be called any number of times, in any order and from
 // any thread; each leaves the manager either fully connected or fully
 // disconnected, and each subscription either fully set up or fully torn down,
@@ -56,8 +65,9 @@ class VenueManager : public venue::Manager {
   // connection down first. If it throws, the manager is left disconnected.
   void Connect() override;
 
-  // Stops the feed, then the parser once it has parsed every frame read.
-  // Subscriptions are kept. Does nothing while disconnected.
+  // Stops the feed, then the parser once it has parsed every frame read, then
+  // tells every receiver the connection ended. Subscriptions are kept. Does
+  // nothing while disconnected.
   void Disconnect();
 
   // Connected, and neither the feed nor the parser died since.
@@ -74,8 +84,8 @@ class VenueManager : public venue::Manager {
       venue::ReceiverFactory make_receiver) override;
 
   // Also unsubscribes from the pair.
-  std::expected<void, venue::Error> Unsubscribe(
-      venue::SubscriptionId id) override;
+  std::expected<void, venue::Error> Unsubscribe(venue::SubscriptionId id,
+                                                venue::Sink sink) override;
 
   std::vector<venue::SubscriptionInfo> List() const override;
 
@@ -102,6 +112,17 @@ class VenueManager : public venue::Manager {
   // Disconnect() without the lock.
   void DisconnectLocked();
 
+  // Queues `symbol` for the resubscriber, once. Called by the parser, on its
+  // thread, when the pair's book fails its checksum.
+  void RequestResubscribe(std::string_view symbol);
+
+  // Resubscriber thread body: resubscribes each queued pair until `stop`.
+  void ResubscribeQueued(const std::stop_token& stop);
+
+  // Unsubscribes from `symbol` and subscribes to it again, if it is still
+  // subscribed and connected; a new connection subscribes afresh anyway.
+  void Resubscribe(std::string_view symbol);
+
   // Serializes every public method but name().
   mutable std::mutex life_cycle_mutex_;
   std::unique_ptr<Credentials> credentials_;
@@ -111,9 +132,15 @@ class VenueManager : public venue::Manager {
   // Declared before the parser, which points into it, so it outlives it.
   std::flat_map<venue::SubscriptionId, Subscription> subscriptions_;
   L2MessageParser parser_;
-  // Declared last so it is destroyed first: it feeds the parser.
+  // Declared after the parser so it is destroyed first: it feeds the parser.
   net::WebsocketFeed feed_;
   bool connected_{false};
+  // Pairs waiting to be resubscribed, in the order their checksums failed.
+  std::mutex resubscribe_mutex_;
+  std::condition_variable_any resubscribe_wake_;
+  std::vector<std::string> pending_resubscribes_;
+  // Stopped first thing in the destructor.
+  std::jthread resubscriber_;
 };
 
 }  // namespace kraken

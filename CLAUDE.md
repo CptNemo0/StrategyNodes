@@ -46,7 +46,7 @@ Each module is expected to grow its own sources within its directory.
 - `crypto/` — base64, HMAC, SHA
 - `net/` — TLS context, one-shot HTTPS client, `WebsocketFeed`, `RawFrame` queue
 - `l2/` — venue-agnostic L2 data: `Message`, `PairPrecision`, `.bin` `FileHeader` and `FileWriter`
-- `frontend/` — `Transmitter` streaming to the TS frontend
+- `frontend/` — the websocket `Server` for the TS frontend, the `Outbox` registry and the `Transmitter` each live subscription streams through; the only module using the generated protobuf types (`wire.h`)
 - `kraken/` — everything Kraken-specific: constants, credentials, REST calls, `L2MessageParser`, `VenueManager`
 - `venue/` — venue-agnostic command routing: the `Manager` interface each venue implements, and the `Router` that hands out subscription ids and reconnects venues
 

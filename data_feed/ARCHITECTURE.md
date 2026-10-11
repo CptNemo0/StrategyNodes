@@ -11,7 +11,7 @@ flowchart LR
 
     subgraph Main["Main thread"]
         MAIN["main()<br/>SIGINT → stop_requested"]
-        ROUTER["venue::Router<br/>global ids, id → {venue, sink}<br/>builds FileWriter / Transmitter"]
+        ROUTER["venue::Router<br/>global ids<br/>builds FileWriter / Transmitter"]
         VM["kraken::VenueManager : venue::Manager<br/>life_cycle_mutex_<br/>subscriptions_: id → {symbol, depth, sink, start, receiver}<br/>at most one per symbol"]
         PREC["kraken::FetchPairPrecision<br/>on every Subscribe"]
     end
@@ -37,7 +37,7 @@ flowchart LR
         FW1["l2::FileWriter<br/>Serialize + flush"]
     end
 
-        TX2["frontend::Transmitter<br/>ETH/USD @ 100"]
+        TX2["frontend::Transmitter → Stream<br/>ETH/USD @ 100<br/>keeps the book, sends to watchers"]
 
     BIN1[/"BTCUSD-&lt;start&gt;[-&lt;end&gt;].bin<br/>l2::FileHeader 64B + l2::Message records"/]
 
@@ -78,13 +78,54 @@ checked before and after the precision fetch. An id already in use throws
 
 A subscription is identified by an id the Router hands out, unique across
 venues. The manager gets the receiver from a factory the Router builds, plus
-the subscription's `Sink`, which it keeps only for `List()` and for spotting
-a duplicate recording.
+the subscription's `Sink`, which it keeps for `List()`, for spotting a
+duplicate recording, and for refusing an `Unsubscribe` that names another
+sink. Both checks run under the manager's lock, so a `Start` that resolves to
+an existing recording and a `Stop` of it cannot interleave.
 
 Every subscription starts with a snapshot: the parser drops a newly attached
 pair's updates until its first one, so updates still in flight from an
 earlier subscription to the pair never reach the new receiver. Unsubscribing
 detaches the receiver from the parser, then unsubscribes from the pair.
+
+## Gaps: reconnects and checksum mismatches
+
+A book cannot be carried across a gap in the stream: whatever changed in it
+is lost. A gap opens in two ways, and both end with a fresh snapshot.
+
+- **A dropped connection.** The parser waits for a fresh snapshot of every
+  pair on each `Start()`, and when a connection that was up ends,
+  `VenueManager::DisconnectLocked()` calls
+  `Receiver::OnGap(core::Gap::kDisconnected)` on every subscription's
+  receiver, once the parser has drained, so never alongside `Receive()`.
+- **A checksum mismatch.** The parser keeps every pair's `l2::Book` at its
+  subscribed depth and, after each frame, compares `kraken::BookChecksum()`
+  (CRC32 over the top 10 asks then bids, each level's digits without the
+  decimal point or leading zeros) with the checksum Kraken sent. Our
+  fixed-point integers are exactly those digits, so no string formatting is
+  needed. On a mismatch it drops the frame, calls
+  `OnGap(core::Gap::kResubscribing)` on the pair's receiver, drops the pair's
+  updates until its next snapshot, and tells the `VenueManager`, whose
+  resubscriber thread sends Kraken an unsubscribe and then a subscribe for
+  the pair on the live connection. Kraken answers in order: updates already
+  in flight (dropped), both acknowledgements, then the new snapshot. The
+  thread exists so the parser never waits on the manager's lock, which
+  `Disconnect()` holds while joining the parser. A pair is resubscribed at
+  most once per second, so a pair that keeps failing cannot flood the venue.
+  A frame without a checksum is not checked.
+
+What the receivers do with a gap:
+
+- `l2::FileWriter` closes and renames the current `.bin`; the snapshot that
+  ends the gap opens the next one, with its own header and start time. A
+  file with no messages yet is kept, so failed reconnect attempts leave no
+  empty files. A final name already taken (two files starting and ending in
+  the same seconds) gets `-1`, `-2`, ... appended.
+- `frontend::Stream` drops its book and sends its watchers a `FeedStatus`:
+  `STATE_DISCONNECTED` for a dropped connection, `STATE_DEGRADED` for a
+  resubscribe. A client that watches during the gap gets that in place of a
+  snapshot. A `FeedStatus` `STATE_LIVE`, naming the stream in
+  `healthy_stream_ids`, goes out just before the snapshot that ends the gap.
 
 ## Lifecycle: main → Connect → Subscribe → shutdown
 
@@ -139,10 +180,11 @@ sequenceDiagram
 
 ## Frontend control API
 
-Partly implemented: the wire protocol and the Router exist; the Server,
-Outbox and Transmitter do not yet. The frontend is a CLI-like
-client that talks to `data_feed` over one websocket on
-`frontend::kStreamPort`, exposed publicly through a Cloudflare Tunnel.
+Implemented, except playback. The frontend is a CLI-like client that talks
+to `data_feed` over one plain websocket on `frontend::kStreamPort` (8765),
+bound to loopback and meant to be exposed publicly through a Cloudflare
+Tunnel, which terminates TLS. There is no authentication yet, so nothing
+should expose the port before there is.
 
 ### Commands
 
@@ -197,11 +239,12 @@ flowchart LR
     CLI["CLI client"] <-- "wss: ClientCommand / MarketDataEvent" --> SRV
     subgraph frontend["frontend/"]
         SRV["frontend::Server<br/>parses ClientCommand, calls Router"]
-        OUT["frontend::Outbox<br/>outgoing frames, who watches which id"]
+        OUT["frontend::Outbox<br/>id → Stream registry"]
         TX["frontend::Transmitter<br/>one per live subscription"]
+        ST["frontend::Stream<br/>the book and its watchers"]
     end
     subgraph venue["venue/"]
-        ROUTER["venue::Router<br/>allocates global ids<br/>id → venue map"]
+        ROUTER["venue::Router<br/>allocates global ids"]
         MGR["venue::Manager<br/>Subscribe / Unsubscribe / List"]
     end
     KVM["kraken::VenueManager"]
@@ -209,15 +252,18 @@ flowchart LR
     SRV --> ROUTER
     ROUTER -- "factory: Transmitter(outbox, id) or FileWriter" --> MGR
     MGR -. "implemented by" .- KVM
-    TX --> OUT --> SRV
+    SRV -- "Watch(id, session)" --> OUT --> ST
+    TX -- "Receive / OnGap" --> ST
+    ST -- "Send(Payload)" --> SRV
 ```
 
-- `venue::Router` (built) allocates the id first, then builds the receiver
-  factory: a `frontend::Transmitter` for `kLive` (to be bound to the Outbox
-  and the id), an `l2::FileWriter` for `kRecord`. That is the only place the
-  two differ. It keeps each id's venue and sink, so `Unsubscribe` can refuse
-  an unknown id or the wrong sink without asking the venue.
-- `venue::Manager` (built) is the interface each venue implements:
+- `venue::Router` allocates the id first, then builds the receiver
+  factory: a `frontend::Transmitter` bound to the Outbox and the id for
+  `kLive`, an `l2::FileWriter` for `kRecord`. That is the only place the
+  two differ. It keeps no copy of the subscriptions: `Unsubscribe` asks each
+  venue in turn (ids are unique across venues), and the venue checks the
+  sink, so nothing can go stale between the Router and a venue.
+- `venue::Manager` is the interface each venue implements:
   `Connect`, `healthy`, `Subscribe`, `Unsubscribe`, `List`. It never sees
   receiver types, only the factory and the sink. Failures come back as
   `std::expected<…, venue::Error>`, whose codes mirror `CommandError::Code`
@@ -227,7 +273,38 @@ flowchart LR
   `healthy()`, waiting `Backoff::initial` (1 s) after a failed attempt and
   doubling up to `Backoff::max` (30 s); a success resets the wait.
 - The Outbox breaks the cycle between the Server (which needs the Router)
-  and the Transmitters (which need to send).
+  and the Transmitters (which need to send). Each Transmitter registers its
+  `Stream` in it under its id for its lifetime. The Stream is shared, so the
+  Outbox holds its lock only to look one up, never while a `Watch` builds a
+  snapshot; no two locks are ever nested.
+- `frontend::Stream` keeps the pair's book, truncated to the subscribed
+  depth, so a client can `Watch` mid-stream: it gets a `StreamInfo` and a
+  snapshot built from the book, then every message after it. Its lock orders
+  the snapshot strictly between two deltas. It sends to watchers
+  (`frontend::Watcher`, implemented by the Server's sessions) on the parser
+  thread; sending only queues.
+- Each event is serialized once, into a `frontend::Payload` (the bytes in a
+  `shared_ptr<const std::string>`), however many clients get it. Each
+  session only writes its own envelope (`sequence`, `send_time_ns`, the
+  payload's tag and length) in front of the shared bytes (`frontend::Frame`),
+  which is valid protobuf because a message is the concatenation of its
+  fields.
+- `frontend::Server` runs every socket on one network thread (Boost.Beast)
+  and every command on a 4 thread pool, one strand per connection, so a
+  `Start` blocking on the venue's REST round trip stalls neither the sockets
+  nor other clients, and a connection's commands run in order. Each frame
+  gets the connection's next `sequence`. A client that stops reading has
+  `Book`s dropped once 4096 frames are queued; the dropped frames still take
+  a sequence number, so the gap tells the client to `Watch` again. Past 8192
+  queued frames (replies to commands it keeps sending) it is dropped. An idle
+  connection gets a `Heartbeat` every 5 s, and websocket pings detect a dead
+  one after 30 s. `FeedStatus` goes out per stream, around reconnects (see
+  Gaps); `STATE_CONNECTING` is not used yet.
+- Shutdown runs in stages, so no session outlives the contexts its socket
+  and strand belong to: the network thread closes every connection and
+  exits, every queued command (and each closed session's unwatch) runs, then
+  replies sent meanwhile are dropped. `main` declares the Outbox, Router and
+  Server in that order.
 
 ### Playback flow control
 

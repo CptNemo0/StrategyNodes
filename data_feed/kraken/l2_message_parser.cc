@@ -4,9 +4,11 @@
 #include <rapidjson/reader.h>
 
 #include <charconv>
+#include <cstdio>
 #include <format>
 #include <mutex>
 #include <optional>
+#include <print>
 #include <ranges>
 #include <stdexcept>
 #include <stop_token>
@@ -22,6 +24,8 @@
 #include "core/receiver.h"
 #include "core/spsc.h"
 #include "core/unix_time.h"
+#include "kraken/checksum.h"
+#include "l2/book.h"
 #include "l2/message.h"
 #include "l2/pair_precision.h"
 #include "net/raw_frame.h"
@@ -128,14 +132,26 @@ const rapidjson::Value& BookData(const rapidjson::Value& document) {
 }  // namespace
 
 L2MessageParser::L2MessageParser(net::RawFrameQueue& frames,
-                                 core::PipelineStatus& status)
-    : frames_{frames}, status_{status} {}
+                                 core::PipelineStatus& status,
+                                 ChecksumMismatchHandler on_checksum_mismatch)
+    : frames_{frames},
+      status_{status},
+      on_checksum_mismatch_{std::move(on_checksum_mismatch)} {}
 
 L2MessageParser::~L2MessageParser() {
   Stop();
 }
 
 void L2MessageParser::Start() {
+  {
+    // A new connection starts every pair over with a snapshot; anything
+    // before it would be left over from the last one.
+    const std::scoped_lock lock{routes_mutex_};
+    // flat_map hands out its values only through its iterators' proxies.
+    for (auto&& [symbol, route] : routes_) {
+      route.awaiting_snapshot = true;
+    }
+  }
   thread_ = std::jthread{[this](const std::stop_token& stop) {
     core::Drain(
         stop, "parser", frames_,
@@ -153,11 +169,13 @@ void L2MessageParser::Stop() {
 
 void L2MessageParser::Attach(const std::string& symbol,
                              const l2::PairPrecision& precision,
+                             u32 depth,
                              core::Receiver<l2::Message>& receiver) {
   const std::scoped_lock lock{routes_mutex_};
   if (!routes_
-           .try_emplace(symbol,
-                        Route{.precision = precision, .receiver = &receiver})
+           .try_emplace(symbol, Route{.precision = precision,
+                                      .receiver = &receiver,
+                                      .book = l2::Book{depth}})
            .second) {
     throw std::invalid_argument{
         std::format("{} already has a receiver", symbol)};
@@ -198,23 +216,40 @@ void L2MessageParser::Dispatch(const net::RawFrame& frame) {
   if (route == routes_.end()) {
     return;
   }
+  Route& routed = route->second;
   // Updates before the route's first snapshot are left over from an earlier
   // subscription to the pair (e.g. at another depth) and do not apply to it.
-  if (!is_snapshot && route->second.awaiting_snapshot) {
+  if (!is_snapshot && routed.awaiting_snapshot) {
     return;
   }
-  route->second.awaiting_snapshot = false;
+  routed.awaiting_snapshot = false;
 
-  const l2::PairPrecision& precision = route->second.precision;
-  route->second.receiver->Receive(
-      l2::Message{.type = is_snapshot ? l2::Message::Type::kSnapshot
-                                      : l2::Message::Type::kUpdate,
-                  .checksum = ParseChecksum(data),
-                  .venue_time_ns = ParseVenueTime(data),
-                  .capture_time_ns = frame.capture_time_ns,
-                  .symbol = std::move(symbol),
-                  .buys = ParseSide(data, "bids", precision),
-                  .sells = ParseSide(data, "asks", precision)});
+  l2::Message message{.type = is_snapshot ? l2::Message::Type::kSnapshot
+                                          : l2::Message::Type::kUpdate,
+                      .checksum = ParseChecksum(data),
+                      .venue_time_ns = ParseVenueTime(data),
+                      .capture_time_ns = frame.capture_time_ns,
+                      .symbol = std::move(symbol),
+                      .buys = ParseSide(data, "bids", routed.precision),
+                      .sells = ParseSide(data, "asks", routed.precision)};
+  if (on_checksum_mismatch_) {
+    routed.book.Apply(message);
+    // Zero means the venue sent none, so there is nothing to check.
+    if (const u32 expected = message.checksum; expected != 0) {
+      if (const u32 actual = BookChecksum(routed.book); actual != expected) {
+        std::println(stderr,
+                     "{}: book checksum {} does not match Kraken's {}; "
+                     "resubscribing",
+                     route->first, actual, expected);
+        routed.awaiting_snapshot = true;
+        routed.book.Clear();
+        routed.receiver->OnGap(core::Gap::kResubscribing);
+        on_checksum_mismatch_(route->first);
+        return;
+      }
+    }
+  }
+  routed.receiver->Receive(std::move(message));
 }
 
 }  // namespace kraken

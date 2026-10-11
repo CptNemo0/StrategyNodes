@@ -6,13 +6,13 @@
 #include <expected>
 #include <flat_map>
 #include <memory>
-#include <mutex>
 #include <stop_token>
 #include <string>
 #include <thread>
 #include <vector>
 
 #include "core/aliasing.h"
+#include "frontend/outbox.h"
 #include "venue/manager.h"
 
 namespace venue {
@@ -26,7 +26,9 @@ struct Backoff {
 
 // Routes the frontend's commands to the venue they name. Hands out
 // subscription ids, unique across venues, and builds each subscription's
-// receiver from its sink. Keeps every venue connected: a venue that is not
+// receiver from its sink. Keeps no record of the subscriptions itself: each
+// venue is the one source of truth for its own, so a command never acts on a
+// copy that has gone stale. Keeps every venue connected: a venue that is not
 // healthy is reconnected on a background thread, waiting longer after each
 // failed attempt.
 //
@@ -41,8 +43,9 @@ class Router {
     SubscriptionInfo subscription;
   };
 
-  // Starts connecting every manager.
-  explicit Router(Managers managers, Backoff backoff = {});
+  // Starts connecting every manager. Live subscriptions register with
+  // `outbox`, which must outlive the Router.
+  Router(Managers managers, frontend::Outbox& outbox, Backoff backoff = {});
 
   Router(const Router&) = delete;
   Router& operator=(const Router&) = delete;
@@ -62,28 +65,22 @@ class Router {
                                                  u32 depth);
 
   // Ends the subscription `id`, which must have `sink`, so that a command
-  // meant for a recording cannot stop a live feed.
+  // meant for a recording cannot stop a live feed. Asks each venue in turn,
+  // as ids are unique across venues.
   std::expected<void, Error> Unsubscribe(SubscriptionId id, Sink sink);
 
   // Every subscription of every venue.
   std::vector<Listing> List() const;
 
  private:
-  // Who a subscription id belongs to.
-  struct Owner {
-    Id venue;
-    Sink sink;
-  };
-
   // Reconnects unhealthy managers until `stop` is requested.
   void Supervise(const std::stop_token& stop);
 
   Managers managers_;
+  frontend::Outbox& outbox_;
   Backoff backoff_;
   // Starts at 1, so that 0 never names a subscription.
   std::atomic<SubscriptionId> next_id_{1};
-  mutable std::mutex owners_mutex_;
-  std::flat_map<SubscriptionId, Owner> owners_;
   // Declared last, so it is stopped before anything it uses is destroyed.
   std::jthread supervisor_;
 };

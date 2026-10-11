@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <format>
 #include <ios>
+#include <optional>
 #include <ranges>
 #include <stdexcept>
 #include <stop_token>
@@ -13,6 +14,7 @@
 #include <utility>
 
 #include "core/aliasing.h"
+#include "core/receiver.h"
 #include "core/spsc.h"
 #include "core/unix_time.h"
 #include "l2/file_header.h"
@@ -31,37 +33,34 @@ i64 UnixTimeNow() {
       .count();
 }
 
+// `[stem]-[end].bin`, or `[stem]-[end]-[n].bin` for the first free n, so a
+// recording never replaces one that started and ended in the same seconds.
+std::filesystem::path FinalPath(std::string_view stem, i64 end) {
+  std::filesystem::path path = std::format("{}-{}.bin", stem, end);
+  for (int n = 1; std::filesystem::exists(path); ++n) {
+    path = std::format("{}-{}-{}.bin", stem, end, n);
+  }
+  return path;
+}
+
 }  // namespace
 
 FileWriter::FileWriter(std::string_view venue,
                        const std::string& symbol,
                        u32 depth,
                        const PairPrecision& precision)
-    : start_time_ns_{core::UnixNanosNow()},
-      file_stem_{std::format("{}-{}",
-                             symbol | std::views::filter([](char c) {
-                               return c != '/';
-                             }) | std::ranges::to<std::string>(),
-                             start_time_ns_ / kNanosPerSecond)},
-      path_{file_stem_ + ".bin"},
-      output_{path_, std::ios::binary} {
-  if (!output_) {
-    throw std::runtime_error{std::format("Cannot open {}", path_.string())};
-  }
-
-  const FileHeader header =
-      MakeFileHeader(venue, symbol, depth, precision, start_time_ns_);
-  output_.write(reinterpret_cast<const char*>(&header), sizeof(header));
-  output_.flush();
-  if (!output_) {
-    throw std::runtime_error{
-        std::format("Cannot write header to {}", path_.string())};
-  }
-
+    : symbol_stem_{symbol |
+                   std::views::filter([](char c) { return c != '/'; }) |
+                   std::ranges::to<std::string>()},
+      header_{MakeFileHeader(venue,
+                             symbol,
+                             depth,
+                             precision,
+                             /*start_time_ns=*/0)} {
+  Open();
   thread_ = std::jthread{[this, symbol](const std::stop_token& stop) {
     core::Drain(
-        stop, symbol, queue_,
-        [this](const Message& message) { Write(message); },
+        stop, symbol, queue_, [this](const Entry& entry) { Consume(entry); },
         [this] { failed_ = true; });
   }};
 }
@@ -77,7 +76,44 @@ FileWriter::~FileWriter() {
 }
 
 void FileWriter::Receive(Message message) {
-  core::PushBlocking(queue_, std::move(message), failed_);
+  core::PushBlocking(queue_, Entry{std::move(message)}, failed_);
+}
+
+void FileWriter::OnGap(core::Gap /*gap*/) {
+  core::PushBlocking(queue_, Entry{std::nullopt}, failed_);
+}
+
+void FileWriter::Consume(const Entry& entry) {
+  if (!entry) {
+    // An empty file is kept for the next connection.
+    if (messages_in_file_ > 0) {
+      Close();
+    }
+    return;
+  }
+  if (!output_.is_open()) {
+    Open();
+  }
+  Write(*entry);
+}
+
+void FileWriter::Open() {
+  header_.start_time_ns = core::UnixNanosNow();
+  file_stem_ = std::format("{}-{}", symbol_stem_,
+                           header_.start_time_ns / kNanosPerSecond);
+  path_ = file_stem_ + ".bin";
+  output_.clear();
+  output_.open(path_, std::ios::binary);
+  if (!output_) {
+    throw std::runtime_error{std::format("Cannot open {}", path_.string())};
+  }
+  output_.write(reinterpret_cast<const char*>(&header_), sizeof(header_));
+  output_.flush();
+  if (!output_) {
+    throw std::runtime_error{
+        std::format("Cannot write header to {}", path_.string())};
+  }
+  messages_in_file_ = 0;
 }
 
 void FileWriter::Write(const Message& message) {
@@ -88,6 +124,7 @@ void FileWriter::Write(const Message& message) {
   if (!output_) {
     throw std::runtime_error{std::format("Cannot write to {}", path_.string())};
   }
+  ++messages_in_file_;
 }
 
 void FileWriter::Close() {
@@ -95,8 +132,7 @@ void FileWriter::Close() {
     return;
   }
   output_.close();
-  std::filesystem::rename(path_,
-                          std::format("{}-{}.bin", file_stem_, UnixTimeNow()));
+  std::filesystem::rename(path_, FinalPath(file_stem_, UnixTimeNow()));
 }
 
 }  // namespace l2

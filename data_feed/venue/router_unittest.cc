@@ -3,6 +3,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <chrono>
 #include <expected>
 #include <filesystem>
@@ -22,6 +23,7 @@
 #include "core/aliasing.h"
 #include "core/receiver.h"
 #include "core/unix_time.h"
+#include "frontend/outbox.h"
 #include "frontend/transmitter.h"
 #include "l2/file_writer.h"
 #include "l2/message.h"
@@ -87,15 +89,21 @@ class FakeManager : public Manager {
     return id;
   }
 
-  std::expected<void, Error> Unsubscribe(SubscriptionId id) override {
+  std::expected<void, Error> Unsubscribe(SubscriptionId id,
+                                         Sink sink) override {
     const std::scoped_lock lock{mutex_};
-    unsubscribed_.push_back(id);
-    if (std::erase_if(subscriptions_, [id](const SubscriptionInfo& s) {
-          return s.id == id;
-        }) == 0) {
+    const auto subscription =
+        std::ranges::find(subscriptions_, id, &SubscriptionInfo::id);
+    if (subscription == subscriptions_.end()) {
       return std::unexpected{
           Error{.code = Error::Code::kUnknownId, .detail = "not here"}};
     }
+    if (subscription->sink != sink) {
+      return std::unexpected{
+          Error{.code = Error::Code::kSinkMismatch, .detail = "other sink"}};
+    }
+    subscriptions_.erase(subscription);
+    unsubscribed_.push_back(id);
     return {};
   }
 
@@ -162,12 +170,14 @@ class RouterTest : public Test {
   void Start(Backoff backoff = kFastBackoff) {
     Router::Managers managers;
     managers.emplace(Id::kKraken, std::move(owned_fake_));
-    router_.emplace(std::move(managers), backoff);
+    router_.emplace(std::move(managers), outbox_, backoff);
   }
 
   Router& router() { return *router_; }
 
-  // Declared in this order, so the router, which owns the fake, goes first.
+  // Declared in this order, so the router, which owns the fake, goes first,
+  // and the outbox, which its live subscriptions register with, last.
+  frontend::Outbox outbox_;
   std::unique_ptr<FakeManager> owned_fake_ = std::make_unique<FakeManager>();
   FakeManager& fake_ = *owned_fake_;
   std::optional<Router> router_;
@@ -193,7 +203,7 @@ TEST_F(RouterTest, ListsSubscriptionsWithTheirVenue) {
 }
 
 TEST_F(RouterTest, RefusesAVenueItHasNoManagerFor) {
-  router_.emplace(Router::Managers{}, kFastBackoff);
+  router_.emplace(Router::Managers{}, outbox_, kFastBackoff);
 
   const std::expected<SubscriptionId, Error> subscribed =
       router().Subscribe<Sink::kLive>(Id::kKraken, "BTC/USD", 100);
@@ -246,15 +256,21 @@ TEST_F(RouterTest, ForgetsAnIdOnceUnsubscribed) {
   EXPECT_THAT(fake_.unsubscribed(), SizeIs(1));
 }
 
-TEST_F(RouterTest, RefusesAnUnknownIdWithoutAskingTheVenue) {
+TEST_F(RouterTest, RefusesAnUnknownId) {
   Start();
 
   EXPECT_EQ(router().Unsubscribe(42, Sink::kLive).error().code,
             Error::Code::kUnknownId);
-  EXPECT_THAT(fake_.unsubscribed(), IsEmpty());
 }
 
-TEST_F(RouterTest, RefusesToStopASubscriptionOfAnotherSink) {
+TEST_F(RouterTest, RefusesAnUnknownIdWithoutAnyVenue) {
+  router_.emplace(Router::Managers{}, outbox_, kFastBackoff);
+
+  EXPECT_EQ(router().Unsubscribe(1, Sink::kLive).error().code,
+            Error::Code::kUnknownId);
+}
+
+TEST_F(RouterTest, PassesOnTheVenuesSinkMismatch) {
   Start();
   ASSERT_TRUE(router().Subscribe<Sink::kLive>(Id::kKraken, "BTC/USD", 100));
 

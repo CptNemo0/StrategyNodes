@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "core/aliasing.h"
+#include "core/receiver.h"
 #include "core/unix_time.h"
 #include "l2/file_header.h"
 #include "l2/message.h"
@@ -252,6 +253,76 @@ TEST_F(FileWriterTest, KeepsConcurrentRecordingsOfDifferentPairsApart) {
               ElementsAreArray(SerializeUpdates(std::array{1})));
   EXPECT_THAT(Records(ReadBytes(names[1])),
               ElementsAreArray(SerializeUpdates(std::array{2, 3})));
+}
+
+// Each venue connection gets its own file: the one that ended is closed, and
+// the next connection's first message opens another, with its own header.
+TEST_F(FileWriterTest, StartsANewFileForEachConnection) {
+  {
+    FileWriter writer{kVenue, "BTC/USD", kDepth, kPrecision};
+    writer.Receive(MakeUpdate(1));
+    writer.OnGap(core::Gap::kDisconnected);
+    writer.Receive(MakeUpdate(2));
+    writer.Receive(MakeUpdate(3));
+  }
+
+  const std::vector<std::string> names = RecordingNames();
+  ASSERT_THAT(names, SizeIs(2));
+  std::vector<std::vector<std::byte>> files =
+      names | std::views::transform(&FileWriterTest::ReadBytes) |
+      std::ranges::to<std::vector>();
+  // Oldest first.
+  std::ranges::sort(files, {}, [](const std::vector<std::byte>& bytes) {
+    return ReadHeader(bytes).start_time_ns;
+  });
+  for (const std::vector<std::byte>& bytes : files) {
+    EXPECT_EQ(ReadHeader(bytes).depth, kDepth);
+  }
+  EXPECT_THAT(Records(files[0]),
+              ElementsAreArray(SerializeUpdates(std::array{1})));
+  EXPECT_THAT(Records(files[1]),
+              ElementsAreArray(SerializeUpdates(std::array{2, 3})));
+}
+
+// Files that start and end within the same second all keep their messages:
+// each final name already taken gets a suffix instead of replacing it.
+TEST_F(FileWriterTest, NeverReplacesARecordingOfTheSameSeconds) {
+  {
+    FileWriter writer{kVenue, "BTC/USD", kDepth, kPrecision};
+    for (const i64 price : std::views::iota(i64{0}, 5)) {
+      writer.Receive(MakeUpdate(price));
+      writer.OnGap(core::Gap::kDisconnected);
+    }
+  }
+
+  EXPECT_THAT(RecordingNames(), SizeIs(5));
+}
+
+// Failed reconnect attempts end no connection with messages on it, so they
+// leave no empty files: the file waiting for messages is kept.
+TEST_F(FileWriterTest, KeepsAFileWithoutMessagesForTheNextConnection) {
+  {
+    FileWriter writer{kVenue, "BTC/USD", kDepth, kPrecision};
+    writer.OnGap(core::Gap::kDisconnected);
+    writer.OnGap(core::Gap::kDisconnected);
+    writer.Receive(MakeUpdate(7));
+  }
+
+  const std::optional<std::string> name = OnlyRecordingName();
+  ASSERT_TRUE(name.has_value());
+  EXPECT_THAT(Records(ReadBytes(*name)),
+              ElementsAreArray(SerializeUpdates(std::array{7})));
+}
+
+// A connection ending last, as at shutdown, opens no file after it.
+TEST_F(FileWriterTest, OpensNoFileAfterTheLastConnection) {
+  {
+    FileWriter writer{kVenue, "BTC/USD", kDepth, kPrecision};
+    writer.Receive(MakeUpdate(1));
+    writer.OnGap(core::Gap::kDisconnected);
+  }
+
+  EXPECT_THAT(RecordingNames(), SizeIs(1));
 }
 
 }  // namespace
