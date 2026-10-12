@@ -112,10 +112,12 @@ Payload MakePayload(const wire::CommandResult& result) {
   return Serialize(wire::MarketDataEvent::kResultFieldNumber, result);
 }
 
-std::string Frame(u64 sequence, i64 send_time_ns, const Payload& payload) {
-  std::string frame;
+std::string FrameHeader(u64 sequence,
+                        i64 send_time_ns,
+                        const Payload& payload) {
+  std::string header;
   {
-    google::protobuf::io::StringOutputStream raw{&frame};
+    google::protobuf::io::StringOutputStream raw{&header};
     google::protobuf::io::CodedOutputStream out{&raw};
     out.WriteTag(
         Tag(wire::MarketDataEvent::kSequenceFieldNumber, kWireTypeVarint));
@@ -125,9 +127,12 @@ std::string Frame(u64 sequence, i64 send_time_ns, const Payload& payload) {
     out.WriteLittleEndian64(static_cast<u64>(send_time_ns));
     out.WriteTag(Tag(payload.field_number, kWireTypeLengthDelimited));
     out.WriteVarint32(static_cast<u32>(payload.bytes->size()));
-    out.WriteString(*payload.bytes);
-  }  // Destroying the streams trims `frame` to what was written.
-  return frame;
+  }  // Destroying the streams trims `header` to what was written.
+  return header;
+}
+
+std::string Frame(u64 sequence, i64 send_time_ns, const Payload& payload) {
+  return FrameHeader(sequence, send_time_ns, payload) + *payload.bytes;
 }
 
 wire::CommandError MakeCommandError(const venue::Error& error) {

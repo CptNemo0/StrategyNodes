@@ -61,9 +61,14 @@ Payload MakePayload(const wire::FeedStatus& status);
 Payload MakePayload(const wire::Heartbeat& heartbeat);
 Payload MakePayload(const wire::CommandResult& result);
 
-// The serialized MarketDataEvent carrying `payload`, with `sequence` and
-// `send_time_ns`. A protobuf message is the concatenation of its fields, so
-// the payload's bytes are copied in as they are rather than encoded again.
+// The start of the serialized MarketDataEvent carrying `payload`: `sequence`,
+// `send_time_ns`, and the payload's tag and length. A protobuf message is the
+// concatenation of its fields, so the payload's bytes can go out right after
+// it as they are, shared rather than copied for each client.
+std::string FrameHeader(u64 sequence, i64 send_time_ns, const Payload& payload);
+
+// The whole serialized MarketDataEvent carrying `payload`: FrameHeader()
+// followed by a copy of the payload's bytes.
 std::string Frame(u64 sequence, i64 send_time_ns, const Payload& payload);
 
 // The CommandError a venue::Error is sent as.

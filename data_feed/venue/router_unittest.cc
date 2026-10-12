@@ -16,6 +16,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -284,31 +285,43 @@ TEST_F(RouterTest, BuildsATransmitterForALiveFeed) {
   Start();
   ASSERT_TRUE(router().Subscribe<Sink::kLive>(Id::kKraken, "BTC/USD", 100));
 
-  const std::unique_ptr<core::Receiver<l2::Message>> receiver =
-      fake_.BuildLastReceiver();
-
-  EXPECT_THAT(dynamic_cast<frontend::Transmitter*>(receiver.get()), NotNull());
+  EXPECT_THAT(
+      dynamic_cast<frontend::Transmitter*>(fake_.BuildLastReceiver().get()),
+      NotNull());
 }
 
 TEST_F(RouterTest, BuildsAFileWriterForARecording) {
-  // FileWriter writes into the working directory.
-  const std::filesystem::path original_directory =
-      std::filesystem::current_path();
-  const std::filesystem::path directory =
-      std::filesystem::temp_directory_path() /
-      std::format("data_feed_router_unittest-{}", core::UnixNanosNow());
-  std::filesystem::create_directories(directory);
-  std::filesystem::current_path(directory);
+  // FileWriter writes into the working directory, so the test works in one
+  // of its own, which it leaves and removes however it ends.
+  struct ScratchDirectory {
+    ScratchDirectory()
+        : original{std::filesystem::current_path()},
+          path{std::filesystem::temp_directory_path() /
+               std::format("data_feed_router_unittest-{}",
+                           core::UnixNanosNow())} {
+      std::filesystem::create_directories(path);
+      std::filesystem::current_path(path);
+    }
+
+    ScratchDirectory(const ScratchDirectory&) = delete;
+    ScratchDirectory& operator=(const ScratchDirectory&) = delete;
+
+    ~ScratchDirectory() {
+      std::error_code ignored;
+      std::filesystem::current_path(original, ignored);
+      std::filesystem::remove_all(path, ignored);
+    }
+
+    std::filesystem::path original;
+    std::filesystem::path path;
+  };
+  const ScratchDirectory scratch;
   Start();
   ASSERT_TRUE(router().Subscribe<Sink::kRecord>(Id::kKraken, "BTC/USD", 100));
 
-  std::unique_ptr<core::Receiver<l2::Message>> receiver =
-      fake_.BuildLastReceiver();
-
-  EXPECT_THAT(dynamic_cast<l2::FileWriter*>(receiver.get()), NotNull());
-  receiver.reset();
-  std::filesystem::current_path(original_directory);
-  std::filesystem::remove_all(directory);
+  // The writer is gone by the end of the statement, before the directory.
+  EXPECT_THAT(dynamic_cast<l2::FileWriter*>(fake_.BuildLastReceiver().get()),
+              NotNull());
 }
 
 TEST_F(RouterTest, ConnectsEveryVenue) {

@@ -326,8 +326,7 @@ TEST_F(ServerTest, AnswersAFrameThatIsNotACommand) {
 
   client.SendRaw("\xff\xff\xff");
 
-  const wire::MarketDataEvent event = client.Read();
-  EXPECT_EQ(event.result().error().code(),
+  EXPECT_EQ(client.Read().result().error().code(),
             wire::CommandError::CODE_INVALID_COMMAND);
   // The connection survives it.
   EXPECT_TRUE(client.Command(ListCommand()).has_subscriptions());

@@ -99,15 +99,23 @@ class VenueManager : public venue::Manager {
     std::unique_ptr<core::Receiver<l2::Message>> receiver;
   };
 
+  using Subscriptions = std::flat_map<venue::SubscriptionId, Subscription>;
+
+  // What Subscribe() returns early when the symbol is taken, or nothing.
+  using Taken =
+      std::optional<std::expected<venue::SubscriptionId, venue::Error>>;
+
   // What Subscribe() returns when `id` or `symbol` are already taken: the
   // existing recording's id if `sink` is kRecord and the pair is recorded at
   // `depth`, or else kSymbolInUse. Nothing if the subscription may go ahead.
   // Throws std::logic_error if `id` is in use, which only a caller bug does.
-  std::optional<std::expected<venue::SubscriptionId, venue::Error>>
-  ResolveTakenLocked(venue::SubscriptionId id,
-                     std::string_view symbol,
-                     u32 depth,
-                     venue::Sink sink) const;
+  Taken ResolveTakenLocked(venue::SubscriptionId id,
+                           std::string_view symbol,
+                           u32 depth,
+                           venue::Sink sink) const;
+
+  // The subscription to `symbol`, or end().
+  Subscriptions::const_iterator FindSymbolLocked(std::string_view symbol) const;
 
   // Disconnect() without the lock.
   void DisconnectLocked();
@@ -130,7 +138,7 @@ class VenueManager : public venue::Manager {
   core::PipelineStatus status_;
   net::RawFrameQueue raw_frames_queue_;
   // Declared before the parser, which points into it, so it outlives it.
-  std::flat_map<venue::SubscriptionId, Subscription> subscriptions_;
+  Subscriptions subscriptions_;
   L2MessageParser parser_;
   // Declared after the parser so it is destroyed first: it feeds the parser.
   net::WebsocketFeed feed_;

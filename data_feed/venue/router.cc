@@ -142,7 +142,10 @@ void Router::Supervise(const std::stop_token& stop) {
       } catch (const std::exception& e) {
         std::println(stderr, "Connecting to {} failed, retrying in {}: {}",
                      manager->name(), retry.delay, e.what());
-        retry.next_attempt = now + retry.delay;
+        // From when the attempt failed rather than when it began, or a
+        // connect that takes longer than the delay to fail would be retried
+        // at once, again and again, holding the venue's lock all along.
+        retry.next_attempt = std::chrono::steady_clock::now() + retry.delay;
         retry.delay = std::min(retry.delay * 2, backoff_.max);
       }
     }

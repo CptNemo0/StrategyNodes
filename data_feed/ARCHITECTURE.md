@@ -286,9 +286,9 @@ flowchart LR
 - Each event is serialized once, into a `frontend::Payload` (the bytes in a
   `shared_ptr<const std::string>`), however many clients get it. Each
   session only writes its own envelope (`sequence`, `send_time_ns`, the
-  payload's tag and length) in front of the shared bytes (`frontend::Frame`),
-  which is valid protobuf because a message is the concatenation of its
-  fields.
+  payload's tag and length; `frontend::FrameHeader`) as the frame goes out,
+  and writes the shared bytes after it uncopied, which is valid protobuf
+  because a message is the concatenation of its fields.
 - `frontend::Server` runs every socket on one network thread (Boost.Beast)
   and every command on a 4 thread pool, one strand per connection, so a
   `Start` blocking on the venue's REST round trip stalls neither the sockets
@@ -296,7 +296,8 @@ flowchart LR
   gets the connection's next `sequence`. A client that stops reading has
   `Book`s dropped once 4096 frames are queued; the dropped frames still take
   a sequence number, so the gap tells the client to `Watch` again. Past 8192
-  queued frames (replies to commands it keeps sending) it is dropped. An idle
+  queued frames (replies to commands it keeps sending) it is dropped, as it
+  is with 64 commands read but not yet answered. An idle
   connection gets a `Heartbeat` every 5 s, and websocket pings detect a dead
   one after 30 s. `FeedStatus` goes out per stream, around reconnects (see
   Gaps); `STATE_CONNECTING` is not used yet.

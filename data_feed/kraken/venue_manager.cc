@@ -2,8 +2,10 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <chrono>
 #include <condition_variable>
+#include <cstddef>
 #include <exception>
 #include <expected>
 #include <format>
@@ -39,6 +41,21 @@ constexpr std::string_view kRawLogStem = "kraken_l2_messages";
 // The least time between two resubscribes of one pair, so a pair whose
 // checksum keeps failing does not flood the venue with requests.
 constexpr std::chrono::seconds kMinResubscribeInterval{1};
+
+// The longest symbol Subscribe() accepts. Kraken's run to a dozen characters
+// or so; anything far longer is not one.
+constexpr std::size_t kMaxSymbolLength = 32;
+
+// Whether `symbol` could name a Kraken pair, e.g. "BTC/USD" or "ETH2.S/ETH".
+// A symbol goes into the AssetPairs query and the book requests as it is, so
+// one from a client must not be able to add anything to either.
+bool IsWellFormedSymbol(std::string_view symbol) {
+  return !symbol.empty() && symbol.size() <= kMaxSymbolLength &&
+         std::ranges::all_of(symbol, [](char c) {
+           return std::isalnum(static_cast<unsigned char>(c)) != 0 ||
+                  c == '/' || c == '.' || c == '-' || c == '_';
+         });
+}
 
 enum class SubscriptionMethod { kSubscribe, kUnsubscribe };
 
@@ -136,12 +153,18 @@ std::expected<venue::SubscriptionId, venue::Error> VenueManager::Subscribe(
         venue::Error::Code::kInvalidDepth,
         std::format("Kraken has no L2 depth {}, only {}", depth, kL2Depths))};
   }
+  if (!IsWellFormedSymbol(symbol)) {
+    return std::unexpected{MakeError(
+        venue::Error::Code::kUnknownSymbol,
+        std::format("A Kraken pair is up to {} letters, digits and '/', '.', "
+                    "'-' or '_', e.g. BTC/USD",
+                    kMaxSymbolLength))};
+  }
   // Checked before the REST round trip so a doomed call fails fast. The round
   // trip itself runs unlocked, so it blocks no one else.
   {
     const std::scoped_lock lock{life_cycle_mutex_};
-    if (const std::optional<std::expected<venue::SubscriptionId, venue::Error>>
-            taken = ResolveTakenLocked(id, symbol, depth, sink)) {
+    if (const Taken taken = ResolveTakenLocked(id, symbol, depth, sink)) {
       return *taken;
     }
   }
@@ -153,8 +176,7 @@ std::expected<venue::SubscriptionId, venue::Error> VenueManager::Subscribe(
 
   const std::scoped_lock lock{life_cycle_mutex_};
   // Again: another call may have taken them during the round trip.
-  if (const std::optional<std::expected<venue::SubscriptionId, venue::Error>>
-          taken = ResolveTakenLocked(id, symbol, depth, sink)) {
+  if (const Taken taken = ResolveTakenLocked(id, symbol, depth, sink)) {
     return *taken;
   }
   const auto subscription =
@@ -219,19 +241,15 @@ std::vector<venue::SubscriptionInfo> VenueManager::List() const {
          std::ranges::to<std::vector>();
 }
 
-std::optional<std::expected<venue::SubscriptionId, venue::Error>>
-VenueManager::ResolveTakenLocked(venue::SubscriptionId id,
-                                 std::string_view symbol,
-                                 u32 depth,
-                                 venue::Sink sink) const {
+VenueManager::Taken VenueManager::ResolveTakenLocked(venue::SubscriptionId id,
+                                                     std::string_view symbol,
+                                                     u32 depth,
+                                                     venue::Sink sink) const {
   if (subscriptions_.contains(id)) {
     throw std::logic_error{
         std::format("Subscription id {} is already in use", id)};
   }
-  const auto taken = std::ranges::find(
-      subscriptions_, symbol, [](const auto& entry) -> std::string_view {
-        return entry.second.symbol;
-      });
+  const auto taken = FindSymbolLocked(symbol);
   if (taken == subscriptions_.end()) {
     return std::nullopt;
   }
@@ -245,6 +263,14 @@ VenueManager::ResolveTakenLocked(venue::SubscriptionId id,
       venue::Error::Code::kSymbolInUse,
       std::format("{} is already subscribed to by subscription {} at depth {}",
                   symbol, taken->first, existing.depth))};
+}
+
+VenueManager::Subscriptions::const_iterator VenueManager::FindSymbolLocked(
+    std::string_view symbol) const {
+  return std::ranges::find(subscriptions_, symbol,
+                           [](const auto& entry) -> std::string_view {
+                             return entry.second.symbol;
+                           });
 }
 
 void VenueManager::RequestResubscribe(std::string_view symbol) {
@@ -289,10 +315,7 @@ void VenueManager::ResubscribeQueued(const std::stop_token& stop) {
 
 void VenueManager::Resubscribe(std::string_view symbol) {
   const std::scoped_lock lock{life_cycle_mutex_};
-  const auto subscription = std::ranges::find(
-      subscriptions_, symbol, [](const auto& entry) -> std::string_view {
-        return entry.second.symbol;
-      });
+  const auto subscription = FindSymbolLocked(symbol);
   if (!connected_ || subscription == subscriptions_.end()) {
     return;
   }

@@ -1,6 +1,8 @@
 #include "frontend/server.h"
 
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <boost/asio/buffer.hpp>
 #include <boost/asio/error.hpp>
 #include <boost/asio/ip/address.hpp>
@@ -59,6 +61,12 @@ constexpr std::size_t kMaxQueuedFrames = 4096;
 // commands but never reads, which would otherwise queue without bound.
 constexpr std::size_t kMaxBacklogFrames = 2 * kMaxQueuedFrames;
 
+// Commands a connection may have read but not yet answered before it is
+// dropped. Reading goes on while commands run, and a Start may take a round
+// trip to the venue, so a client sending them faster than they run would
+// otherwise queue work, and venue requests, without bound.
+constexpr std::size_t kMaxPendingCommands = 64;
+
 // How long to wait before accepting again after a failed accept.
 constexpr std::chrono::milliseconds kAcceptRetryDelay{100};
 
@@ -91,6 +99,12 @@ wire::CommandResult Ok() {
   wire::CommandResult result;
   result.mutable_ok();
   return result;
+}
+
+// Every Heartbeat is the same, so it is serialized once.
+const Payload& HeartbeatPayload() {
+  static const Payload heartbeat = MakePayload(wire::Heartbeat{});
+  return heartbeat;
 }
 
 // `outcome`'s error, or else what `on_success` makes of its value.
@@ -141,7 +155,10 @@ class Server::Session : public Watcher,
     ws_.read_message_max(kMaxCommandBytes);
     ws_.binary(true);
     ws_.async_accept([self = shared_from_this()](boost::beast::error_code ec) {
-      if (ec) {
+      // A handshake that completed just before Close() still runs; arming
+      // the heartbeat now would keep the closed session, and a shutting down
+      // network thread, waiting out a whole period.
+      if (ec || self->closed_) {
         self->Close();
         return;
       }
@@ -159,6 +176,9 @@ class Server::Session : public Watcher,
   }
 
   CommandStrand& commands() { return commands_; }
+
+  // Called once a command read from this connection has been answered.
+  void CommandDone() { --pending_commands_; }
 
   // Drops the connection, failing whatever is pending on it. Idempotent. On
   // the network thread.
@@ -193,6 +213,11 @@ class Server::Session : public Watcher,
         self->Close();
         return;
       }
+      if (self->pending_commands_ >= kMaxPendingCommands) {
+        self->Close();
+        return;
+      }
+      ++self->pending_commands_;
       wire::ClientCommand command;
       const bool parsed = command.ParseFromArray(
           self->buffer_.data().data(), static_cast<int>(self->buffer_.size()));
@@ -206,15 +231,16 @@ class Server::Session : public Watcher,
           self->Send(
               MakePayload(Failure(wire::CommandError::CODE_INVALID_COMMAND,
                                   "Not a ClientCommand")));
+          self->CommandDone();
         });
       }
       self->Read();
     });
   }
 
-  // Wraps `payload` in this connection's envelope and queues it to go out.
+  // Queues `payload` to go out under this connection's next sequence number.
   // On the network thread.
-  void Enqueue(const Payload& payload) {
+  void Enqueue(Payload payload) {
     if (closed_) {
       return;
     }
@@ -229,7 +255,8 @@ class Server::Session : public Watcher,
         return;
       }
     }
-    outgoing_.push_back(Frame(next_sequence_++, core::UnixNanosNow(), payload));
+    outgoing_.push_back(
+        Outgoing{.sequence = next_sequence_++, .payload = std::move(payload)});
     last_enqueue_ = std::chrono::steady_clock::now();
     // Otherwise a write is in flight and picks this one up.
     if (outgoing_.size() == 1) {
@@ -237,10 +264,17 @@ class Server::Session : public Watcher,
     }
   }
 
-  // Beast allows one write in flight, so frames go out one by one.
+  // Beast allows one write in flight, so frames go out one by one. The
+  // envelope is written as the frame goes out, so its send time is when it
+  // went on the wire, and the payload's bytes go out shared, not copied.
   void WriteFront() {
+    Outgoing& front = outgoing_.front();
+    front.header =
+        FrameHeader(front.sequence, core::UnixNanosNow(), front.payload);
     ws_.async_write(
-        boost::asio::buffer(outgoing_.front()),
+        std::array<boost::asio::const_buffer, 2>{
+            boost::asio::buffer(front.header),
+            boost::asio::buffer(*front.payload.bytes)},
         [self = shared_from_this()](boost::beast::error_code ec, std::size_t) {
           if (ec) {
             self->Close();
@@ -262,7 +296,7 @@ class Server::Session : public Watcher,
           }
           if (std::chrono::steady_clock::now() - self->last_enqueue_ >=
               kHeartbeatPeriod) {
-            self->Enqueue(MakePayload(wire::Heartbeat{}));
+            self->Enqueue(HeartbeatPayload());
           }
           // Enqueue() may have dropped the connection.
           if (!self->closed_) {
@@ -271,17 +305,28 @@ class Server::Session : public Watcher,
         });
   }
 
+  // A frame waiting to go out.
+  struct Outgoing {
+    u64 sequence;
+    Payload payload;
+    // The envelope, written by WriteFront() as the frame goes out.
+    std::string header;
+  };
+
   Server& server_;
   WebsocketStream ws_;
   CommandStrand commands_;
   boost::asio::steady_timer heartbeat_;
   boost::beast::flat_buffer buffer_;
-  // Serialized frames waiting to go out; the front one may be in flight.
-  std::deque<std::string> outgoing_;
+  // Frames waiting to go out; the front one may be in flight, so a deque,
+  // whose push_back() leaves it in place.
+  std::deque<Outgoing> outgoing_;
   u64 next_sequence_{0};
   std::chrono::steady_clock::time_point last_enqueue_{
       std::chrono::steady_clock::now()};
   bool closed_{false};
+  // Read on the network thread, answered on the command strand.
+  std::atomic<std::size_t> pending_commands_{0};
 };
 
 Server::Server(venue::Router& router,
@@ -377,6 +422,7 @@ void Server::Execute(const std::shared_ptr<Session>& session,
                       wire::CommandResult result = Run(*session, command);
                       result.set_request_id(command.request_id());
                       session->Send(MakePayload(result));
+                      session->CommandDone();
                     });
 }
 
