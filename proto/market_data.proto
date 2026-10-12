@@ -172,6 +172,21 @@ message SubscriptionList {
   repeated Subscription subscriptions = 1;
 }
 
+// One pair a venue can stream. A message rather than a bare string, so that
+// more about a pair can be added without breaking clients.
+message Pair {
+  // E.g. "BTC/USD"; what Start takes.
+  string symbol = 1;
+}
+
+// What a venue can stream: its pairs, and the book depths it accepts.
+message PairList {
+  // Sorted by symbol.
+  repeated Pair pairs = 1;
+  // Ascending.
+  repeated uint32 depths = 2;
+}
+
 // Why a command failed.
 message CommandError {
   enum Code {
@@ -215,6 +230,8 @@ message CommandResult {
     SubscriptionList subscriptions = 4;
     // Any command.
     CommandError error = 5;
+    // ListPairs.
+    PairList pairs = 6;
   }
 }
 
@@ -251,6 +268,11 @@ message Watch {
 // Stops streaming books to this client.
 message Unwatch {}
 
+// Lists the pairs a venue can stream, so a client can pick one to Start.
+message ListPairs {
+  Venue venue = 1;
+}
+
 // Every frame a client sends.
 message ClientCommand {
   // Chosen by the client and echoed in the CommandResult.
@@ -262,6 +284,8 @@ message ClientCommand {
     List list = 4;
     Watch watch = 5;
     Unwatch unwatch = 6;
+    // Past the fields reserved below.
+    ListPairs list_pairs = 16;
   }
 
   // Playback: ListRecordings, Play, PlaybackNext, StopPlayback.

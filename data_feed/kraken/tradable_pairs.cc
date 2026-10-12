@@ -2,6 +2,7 @@
 
 #include <rapidjson/document.h>
 
+#include <algorithm>
 #include <boost/beast/http.hpp>
 #include <format>
 #include <ranges>
@@ -45,17 +46,19 @@ std::vector<std::string> FetchTradablePairs() {
 
   // Not result_object.GetObject(): on Windows, <windows.h> (pulled in via
   // Boost.Asio) macro-expands GetObject to GetObjectA/W.
-  return std::ranges::subrange(result_object.MemberBegin(),
-                               result_object.MemberEnd()) |
-         std::views::filter([](const auto& pair) {
-           return pair.value.HasMember("status") &&
-                  std::string_view{pair.value["status"].GetString()} ==
-                      kOnlineStatus;
-         }) |
-         std::views::transform([](const auto& pair) {
-           return std::string{pair.name.GetString()};
-         }) |
-         std::ranges::to<std::vector>();
+  std::vector<std::string> symbols =
+      std::ranges::subrange(result_object.MemberBegin(),
+                            result_object.MemberEnd()) |
+      std::views::filter([](const auto& pair) {
+        return pair.value.HasMember("status") &&
+               std::string_view{pair.value["status"].GetString()} ==
+                   kOnlineStatus;
+      }) |
+      std::views::transform(
+          [](const auto& pair) { return std::string{pair.name.GetString()}; }) |
+      std::ranges::to<std::vector>();
+  std::ranges::sort(symbols);
+  return symbols;
 }
 
 }  // namespace kraken

@@ -1,6 +1,7 @@
 #ifndef DATA_FEED_KRAKEN_VENUE_MANAGER_H_
 #define DATA_FEED_KRAKEN_VENUE_MANAGER_H_
 
+#include <chrono>
 #include <condition_variable>
 #include <expected>
 #include <flat_map>
@@ -89,6 +90,10 @@ class VenueManager : public venue::Manager {
 
   std::vector<venue::SubscriptionInfo> List() const override;
 
+  // Fetches the pairs from the venue, so it blocks for a REST round trip,
+  // unless they were fetched recently.
+  std::expected<venue::PairList, venue::Error> ListPairs() override;
+
  private:
   // The one subscriber to a pair.
   struct Subscription {
@@ -147,6 +152,13 @@ class VenueManager : public venue::Manager {
   std::mutex resubscribe_mutex_;
   std::condition_variable_any resubscribe_wake_;
   std::vector<std::string> pending_resubscribes_;
+  // The tradable pairs as last fetched, and when. Under pairs_mutex_, which is
+  // held across a fetch, so callers arriving meanwhile wait for its result
+  // rather than each fetching the list again. Independent of
+  // life_cycle_mutex_, so a fetch blocks no subscription.
+  std::mutex pairs_mutex_;
+  std::vector<std::string> pairs_;
+  std::chrono::steady_clock::time_point pairs_fetched_at_;
   // Stopped first thing in the destructor.
   std::jthread resubscriber_;
 };

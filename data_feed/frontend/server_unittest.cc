@@ -39,6 +39,7 @@
 namespace frontend {
 namespace {
 
+using ::testing::ElementsAre;
 using ::testing::IsEmpty;
 using ::testing::SizeIs;
 using ::testing::Test;
@@ -106,6 +107,17 @@ class FakeManager : public venue::Manager {
     return infos;
   }
 
+  std::expected<venue::PairList, venue::Error> ListPairs() override {
+    const std::scoped_lock lock{mutex_};
+    return pairs_;
+  }
+
+  // What ListPairs() returns from then on.
+  void AnswerListPairs(std::expected<venue::PairList, venue::Error> pairs) {
+    const std::scoped_lock lock{mutex_};
+    pairs_ = std::move(pairs);
+  }
+
   // Hands `message` to live subscription `id`'s receiver, as the parser would.
   void Feed(venue::SubscriptionId id, l2::Message message) {
     const std::scoped_lock lock{mutex_};
@@ -126,6 +138,8 @@ class FakeManager : public venue::Manager {
 
   mutable std::mutex mutex_;
   std::flat_map<venue::SubscriptionId, Subscription> subscriptions_;
+  std::expected<venue::PairList, venue::Error> pairs_{
+      venue::PairList{.symbols = {"BTC/USD", "ETH/USD"}, .depths = {10, 100}}};
 };
 
 // A blocking websocket client speaking the wire protocol.
@@ -221,6 +235,12 @@ wire::ClientCommand ListCommand() {
   return command;
 }
 
+wire::ClientCommand ListPairsCommand(wire::Venue venue) {
+  wire::ClientCommand command;
+  command.mutable_list_pairs()->set_venue(venue);
+  return command;
+}
+
 wire::ClientCommand WatchCommand(u64 id) {
   wire::ClientCommand command;
   command.mutable_watch()->set_id(id);
@@ -303,6 +323,39 @@ TEST_F(ServerTest, PassesOnTheVenuesError) {
 
   EXPECT_EQ(result.error().code(), wire::CommandError::CODE_INVALID_DEPTH);
   EXPECT_EQ(result.error().detail(), "no depth 0");
+}
+
+TEST_F(ServerTest, ListsTheVenuesPairs) {
+  Client client = Connect();
+
+  const wire::CommandResult result =
+      client.Command(ListPairsCommand(wire::VENUE_KRAKEN));
+
+  ASSERT_TRUE(result.has_pairs());
+  ASSERT_THAT(result.pairs().pairs(), SizeIs(2));
+  EXPECT_EQ(result.pairs().pairs(0).symbol(), "BTC/USD");
+  EXPECT_EQ(result.pairs().pairs(1).symbol(), "ETH/USD");
+  EXPECT_THAT(result.pairs().depths(), ElementsAre(10u, 100u));
+}
+
+TEST_F(ServerTest, PassesOnTheVenuesErrorListingPairs) {
+  fake_.AnswerListPairs(std::unexpected{venue::Error{
+      .code = venue::Error::Code::kVenueFailed, .detail = "unreachable"}});
+  Client client = Connect();
+
+  const wire::CommandResult result =
+      client.Command(ListPairsCommand(wire::VENUE_KRAKEN));
+
+  EXPECT_EQ(result.error().code(), wire::CommandError::CODE_VENUE_FAILED);
+  EXPECT_EQ(result.error().detail(), "unreachable");
+}
+
+TEST_F(ServerTest, RefusesToListPairsWithoutAVenue) {
+  Client client = Connect();
+
+  EXPECT_EQ(
+      client.Command(ListPairsCommand(wire::VENUE_UNSPECIFIED)).error().code(),
+      wire::CommandError::CODE_INVALID_COMMAND);
 }
 
 TEST_F(ServerTest, RefusesAStartWithoutASink) {

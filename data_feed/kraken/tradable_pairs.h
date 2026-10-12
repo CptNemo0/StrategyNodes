@@ -7,7 +7,7 @@
 namespace kraken {
 
 // Queries Kraken's public AssetPairs endpoint for every pair and returns the
-// symbols (e.g. "BTC/USD") whose status is "online". Throws
+// symbols (e.g. "BTC/USD") whose status is "online", sorted. Throws
 // std::runtime_error if the venue reports an error.
 std::vector<std::string> FetchTradablePairs();
 

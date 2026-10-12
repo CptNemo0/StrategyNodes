@@ -440,6 +440,8 @@ wire::CommandResult Server::Run(Session& session,
         return Watch(session, command.watch());
       case wire::ClientCommand::kUnwatch:
         return Unwatch(session);
+      case wire::ClientCommand::kListPairs:
+        return ListPairs(command.list_pairs());
       case wire::ClientCommand::COMMAND_NOT_SET:
         break;
     }
@@ -525,6 +527,24 @@ wire::CommandResult Server::Unwatch(Session& session) {
     outbox_.Unwatch(std::exchange(session.watched_id, 0), session);
   }
   return Ok();
+}
+
+wire::CommandResult Server::ListPairs(const wire::ListPairs& list_pairs) {
+  const std::optional<venue::Id> venue = FromWire(list_pairs.venue());
+  if (!venue) {
+    return Failure(wire::CommandError::CODE_INVALID_COMMAND,
+                   "ListPairs needs a known venue");
+  }
+  return ToResult(router_.ListPairs(*venue), [](const venue::PairList& pairs) {
+    wire::CommandResult result;
+    wire::PairList& listed = *result.mutable_pairs();
+    listed.mutable_pairs()->Reserve(static_cast<int>(pairs.symbols.size()));
+    for (const std::string& symbol : pairs.symbols) {
+      listed.add_pairs()->set_symbol(symbol);
+    }
+    listed.mutable_depths()->Add(pairs.depths.begin(), pairs.depths.end());
+    return result;
+  });
 }
 
 void Server::Forget(const std::shared_ptr<Session>& session) {

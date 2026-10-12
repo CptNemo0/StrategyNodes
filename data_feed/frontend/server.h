@@ -32,9 +32,9 @@ struct ServerAddress {
 
 // The frontend's websocket endpoint. Each client connection sends binary
 // ClientCommand frames and receives binary MarketDataEvent frames, one message
-// per frame. Commands go to the Router (Start, Stop, List) or to the Outbox
-// (Watch, Unwatch), and each is answered with a CommandResult carrying its
-// request_id.
+// per frame. Commands go to the Router (Start, Stop, List, ListPairs) or to the
+// Outbox (Watch, Unwatch), and each is answered with a CommandResult carrying
+// its request_id.
 //
 // Runs every socket on one network thread. Commands run on a small pool
 // instead, as Start blocks for a round trip to the venue; each connection's
@@ -78,6 +78,7 @@ class Server {
   wire::CommandResult List() const;
   wire::CommandResult Watch(Session& session, const wire::Watch& watch);
   wire::CommandResult Unwatch(Session& session);
+  wire::CommandResult ListPairs(const wire::ListPairs& list_pairs);
 
   // Unwatches for a closed session and lets it go.
   void Forget(const std::shared_ptr<Session>& session);

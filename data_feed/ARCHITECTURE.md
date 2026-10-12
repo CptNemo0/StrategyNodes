@@ -192,6 +192,7 @@ One venue for now, so it defaults to kraken.
 
 | CLI | Request | Reply |
 |---|---|---|
+| `pairs` | `ListPairs{KRAKEN}` | `PairList`: the symbols, sorted, and the depths |
 | `live start BTC/USD@100` | `Start{KRAKEN, "BTC/USD", 100, LIVE}` | `CommandResult.started_id` |
 | `live ls` | `List{}`, client keeps `sink == LIVE` | `SubscriptionList` |
 | `live stop 3` | `Stop{3, LIVE}` | `Ok` / `CommandError` |
@@ -205,6 +206,14 @@ live feed by mistake (`CODE_SINK_MISMATCH`). `Book.stream_id` is the
 subscription id, so `Watch{3}` yields `StreamInfo{stream_id: 3}` and
 `Book{stream_id: 3}`. Live feeds, recordings and playbacks run concurrently.
 
+`ListPairs` lets a client pick a symbol and depth for `Start` rather than
+guess one. Kraken's are its AssetPairs whose status is `online`, fetched by
+`kraken::FetchTradablePairs()`; with `assetVersion=1` their keys are the
+websocket v2 symbols (`BTC/USD`, not `XBT/USD`), so they go into `Start` as
+they are. The full response is some 700 KB, so `kraken::VenueManager` keeps
+the list for 5 minutes, under a lock of its own that is held across the
+fetch, so concurrent callers share one fetch and no subscription waits on it.
+
 ### Wire protocol
 
 `proto/market_data.proto`, compiled with `protoc` for C++ and `protoc-gen-es`
@@ -217,11 +226,13 @@ PATH: protoc needs GCC's runtime DLLs, and Git for Windows ships an
 incompatible `libstdc++-6.dll`.
 
 - Client to server: `ClientCommand{request_id, oneof command}` with `Start`,
-  `Stop`, `List`, `Watch`, `Unwatch`; fields 7 to 15 reserved for playback
-  (`ListRecordings`, `Play`, `PlaybackNext`, `StopPlayback`).
+  `Stop`, `List`, `Watch`, `Unwatch`, and `ListPairs` (field 16); fields 7
+  to 15 reserved for playback (`ListRecordings`, `Play`, `PlaybackNext`,
+  `StopPlayback`).
 - Server to client: the existing `MarketDataEvent` envelope (`sequence`,
   `send_time_ns`) gains a `CommandResult{request_id, oneof result}` case:
-  `started_id`, `Ok`, `SubscriptionList`, `CommandError{code, detail}`.
+  `started_id`, `Ok`, `SubscriptionList`, `PairList{pairs, depths}`,
+  `CommandError{code, detail}`.
 - `Subscription{id, venue, symbol, depth, sink, start_time_ns}` describes one
   entry of a `SubscriptionList`.
 - Not `Request` / `Response` / `Error`: those would shadow JavaScript globals
@@ -264,7 +275,7 @@ flowchart LR
   venue in turn (ids are unique across venues), and the venue checks the
   sink, so nothing can go stale between the Router and a venue.
 - `venue::Manager` is the interface each venue implements:
-  `Connect`, `healthy`, `Subscribe`, `Unsubscribe`, `List`. It never sees
+  `Connect`, `healthy`, `Subscribe`, `Unsubscribe`, `List`, `ListPairs`. It never sees
   receiver types, only the factory and the sink. Failures come back as
   `std::expected<…, venue::Error>`, whose codes mirror `CommandError::Code`
   (plus `kUnknownVenue`, which maps to `CODE_INVALID_COMMAND`). `List()`

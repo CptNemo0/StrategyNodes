@@ -113,6 +113,17 @@ class FakeManager : public Manager {
     return subscriptions_;
   }
 
+  std::expected<PairList, Error> ListPairs() override {
+    const std::scoped_lock lock{mutex_};
+    return pairs_;
+  }
+
+  // What ListPairs() returns from then on.
+  void AnswerListPairs(std::expected<PairList, Error> pairs) {
+    const std::scoped_lock lock{mutex_};
+    pairs_ = std::move(pairs);
+  }
+
   // The next `count` Connect() calls throw.
   void FailConnects(int count) {
     const std::scoped_lock lock{mutex_};
@@ -150,6 +161,7 @@ class FakeManager : public Manager {
   std::vector<SubscriptionInfo> subscriptions_;
   std::vector<ReceiverFactory> factories_;
   std::vector<SubscriptionId> unsubscribed_;
+  std::expected<PairList, Error> pairs_;
 };
 
 // Polls `condition` until it holds or kWaitLimit passes.
@@ -227,6 +239,39 @@ TEST_F(RouterTest, PassesOnTheVenuesError) {
   // The id it would have had names nothing.
   EXPECT_EQ(router().Unsubscribe(1, Sink::kLive).error().code,
             Error::Code::kUnknownId);
+}
+
+TEST_F(RouterTest, ListsTheVenuesPairs) {
+  fake_.AnswerListPairs(
+      PairList{.symbols = {"BTC/USD", "ETH/USD"}, .depths = {10, 100}});
+  Start();
+
+  const std::expected<PairList, Error> pairs = router().ListPairs(Id::kKraken);
+
+  ASSERT_TRUE(pairs);
+  EXPECT_THAT(pairs->symbols, ElementsAre("BTC/USD", "ETH/USD"));
+  EXPECT_THAT(pairs->depths, ElementsAre(10u, 100u));
+}
+
+TEST_F(RouterTest, PassesOnTheVenuesErrorListingPairs) {
+  fake_.AnswerListPairs(std::unexpected{
+      Error{.code = Error::Code::kVenueFailed, .detail = "unreachable"}});
+  Start();
+
+  const std::expected<PairList, Error> pairs = router().ListPairs(Id::kKraken);
+
+  ASSERT_FALSE(pairs);
+  EXPECT_THAT(pairs.error(),
+              FieldsAre(Error::Code::kVenueFailed, "unreachable"));
+}
+
+TEST_F(RouterTest, RefusesToListPairsOfAVenueItHasNoManagerFor) {
+  router_.emplace(Router::Managers{}, outbox_, kFastBackoff);
+
+  const std::expected<PairList, Error> pairs = router().ListPairs(Id::kKraken);
+
+  ASSERT_FALSE(pairs);
+  EXPECT_EQ(pairs.error().code, Error::Code::kUnknownVenue);
 }
 
 TEST_F(RouterTest, ReturnsTheIdOfARecordingAlreadyRunning) {

@@ -53,6 +53,11 @@ ReceiverFactory MakeReceiverFactory(frontend::Outbox& outbox,
   };
 }
 
+Error UnknownVenue(Id venue) {
+  return Error{.code = Error::Code::kUnknownVenue,
+               .detail = std::format("No venue {}", std::to_underlying(venue))};
+}
+
 }  // namespace
 
 Router::Router(Managers managers, frontend::Outbox& outbox, Backoff backoff)
@@ -68,9 +73,7 @@ std::expected<SubscriptionId, Error>
 Router::Subscribe(Id venue, const std::string& symbol, u32 depth) {
   const auto manager = managers_.find(venue);
   if (manager == managers_.end()) {
-    return std::unexpected{
-        Error{.code = Error::Code::kUnknownVenue,
-              .detail = std::format("No venue {}", std::to_underlying(venue))}};
+    return std::unexpected{UnknownVenue(venue)};
   }
   const SubscriptionId id = next_id_++;
   return manager->second->Subscribe(
@@ -110,6 +113,12 @@ std::vector<Router::Listing> Router::List() const {
         }));
   }
   return listings;
+}
+
+std::expected<PairList, Error> Router::ListPairs(Id venue) {
+  const auto manager = managers_.find(venue);
+  return manager == managers_.end() ? std::unexpected{UnknownVenue(venue)}
+                                    : manager->second->ListPairs();
 }
 
 void Router::Supervise(const std::stop_token& stop) {

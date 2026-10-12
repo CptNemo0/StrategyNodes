@@ -17,8 +17,9 @@ to the client over a websocket.
 
 Nothing is subscribed at start. A client connects to the websocket on
 `127.0.0.1:8765` and sends protobuf `ClientCommand`s
-(`proto/market_data.proto`): `Start` / `Stop` / `List` for recordings and
-live feeds, `Watch` / `Unwatch` to stream a live feed's books. See
+(`proto/market_data.proto`): `ListPairs` for the pairs a venue can stream,
+`Start` / `Stop` / `List` for recordings and live feeds, `Watch` / `Unwatch`
+to stream a live feed's books. See
 `data_feed/ARCHITECTURE.md`.
 
 Each subscription is set up as follows:

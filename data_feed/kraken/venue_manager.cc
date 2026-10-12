@@ -28,6 +28,7 @@
 #include "kraken/l2_message_parser.h"
 #include "kraken/message_size.h"
 #include "kraken/pair_precision.h"
+#include "kraken/tradable_pairs.h"
 #include "l2/pair_precision.h"
 #include "net/websocket_feed.h"
 #include "venue/manager.h"
@@ -41,6 +42,11 @@ constexpr std::string_view kRawLogStem = "kraken_l2_messages";
 // The least time between two resubscribes of one pair, so a pair whose
 // checksum keeps failing does not flood the venue with requests.
 constexpr std::chrono::seconds kMinResubscribeInterval{1};
+
+// How long ListPairs() serves the pairs it fetched before fetching them
+// again. The full list is a response of some 700 KB, and pairs come and go
+// rarely.
+constexpr std::chrono::minutes kPairsLifetime{5};
 
 // The longest symbol Subscribe() accepts. Kraken's run to a dozen characters
 // or so; anything far longer is not one.
@@ -239,6 +245,27 @@ std::vector<venue::SubscriptionInfo> VenueManager::List() const {
                .start_time_ns = subscription.start_time_ns};
          }) |
          std::ranges::to<std::vector>();
+}
+
+std::expected<venue::PairList, venue::Error> VenueManager::ListPairs() {
+  const std::scoped_lock lock{pairs_mutex_};
+  const std::chrono::steady_clock::time_point now =
+      std::chrono::steady_clock::now();
+  if (pairs_.empty() || now - pairs_fetched_at_ >= kPairsLifetime) {
+    try {
+      pairs_ = FetchTradablePairs();
+    } catch (const std::exception& e) {
+      return std::unexpected{
+          MakeError(venue::Error::Code::kVenueFailed, e.what())};
+    }
+    pairs_fetched_at_ = now;
+  }
+  return venue::PairList{.symbols = pairs_,
+                         .depths = kL2Depths |
+                                   std::views::transform([](u64 depth) {
+                                     return static_cast<u32>(depth);
+                                   }) |
+                                   std::ranges::to<std::vector>()};
 }
 
 VenueManager::Taken VenueManager::ResolveTakenLocked(venue::SubscriptionId id,

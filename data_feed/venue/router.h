@@ -72,6 +72,10 @@ class Router {
   // Every subscription of every venue.
   std::vector<Listing> List() const;
 
+  // The pairs `venue` can stream and the depths it accepts. May block for a
+  // round trip to the venue.
+  std::expected<PairList, Error> ListPairs(Id venue);
+
  private:
   // Reconnects unhealthy managers until `stop` is requested.
   void Supervise(const std::stop_token& stop);

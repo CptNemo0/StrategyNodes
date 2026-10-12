@@ -45,6 +45,14 @@ struct SubscriptionInfo {
   i64 start_time_ns;
 };
 
+// What a venue can stream.
+struct PairList {
+  // Its pairs, e.g. "BTC/USD", sorted.
+  std::vector<std::string> symbols;
+  // The book depths it accepts, ascending.
+  std::vector<u32> depths;
+};
+
 // Why a command failed. The codes mirror the wire's CommandError::Code.
 struct Error {
   enum class Code : u8 {
@@ -113,6 +121,11 @@ class Manager {
 
   // Every subscription, ordered by id.
   virtual std::vector<SubscriptionInfo> List() const = 0;
+
+  // The pairs the venue can stream and the depths it accepts. Fails with
+  // kVenueFailed if the venue cannot be asked. May block for a round trip
+  // to the venue.
+  virtual std::expected<PairList, Error> ListPairs() = 0;
 };
 
 }  // namespace venue
