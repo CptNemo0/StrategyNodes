@@ -41,3 +41,5 @@ _unused/
 
 # Private planning notes, not for GitHub
 private/
+docs/
+kraken_l2_messages-*.txt

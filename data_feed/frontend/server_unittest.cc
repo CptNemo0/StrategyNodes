@@ -2,12 +2,18 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <market_data.pb.h>
+
+#include <exception>
+#include <stop_token>
+
 
 #ifdef _WIN32
 #include <winsock2.h>
 #endif
 
 #include <algorithm>
+#include <atomic>
 #include <boost/asio/buffer.hpp>
 #include <boost/asio/connect.hpp>
 #include <boost/asio/io_context.hpp>
@@ -24,6 +30,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -515,6 +522,46 @@ TEST_F(ServerTest, ShutsDownWithAClientStillWatching) {
 
   // The transmitter outlives the server, and must not reach its sessions.
   fake_.Feed(1, Snapshot(100));
+}
+
+// Clients watch and leave while the parser thread streams into the
+// subscription, as when a frontend reconnects under live data. Every send to
+// a session must find it alive: a dead one shows up as bad_weak_ptr thrown
+// into the parser, or as heap corruption.
+TEST_F(ServerTest, SurvivesClientsWatchingAndLeavingMidStream) {
+  constexpr int kClients = 300;
+  {
+    Client starter = Connect();
+    ASSERT_TRUE(starter.Command(StartCommand("BTC/USD", 10, wire::SINK_LIVE))
+                    .started_id());
+  }
+  std::atomic<int> failures{0};
+  // Stopped and joined however the test ends, even by a failed ASSERT.
+  std::jthread parser{[&](const std::stop_token& stop) {
+    for (i64 price = 1; !stop.stop_requested(); ++price) {
+      try {
+        fake_.Feed(1, Snapshot(price));
+      } catch (const std::exception&) {
+        ++failures;
+      }
+    }
+  }};
+
+  for (int round = 0; round < kClients; ++round) {
+    Client client = Connect();
+    ASSERT_TRUE(client.Command(WatchCommand(1)).has_ok());
+    if (round % 3 == 0) {
+      ASSERT_TRUE(client.Command(UnwatchCommand()).has_ok());
+    }
+    // Half leave with a close handshake, half just drop the connection.
+    if (round % 2 == 0) {
+      client.Close();
+    }
+  }
+  parser.request_stop();
+  parser.join();
+
+  EXPECT_EQ(failures, 0);
 }
 
 }  // namespace

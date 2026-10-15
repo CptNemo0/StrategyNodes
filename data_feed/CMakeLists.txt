@@ -88,6 +88,32 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
   target_link_libraries(${PROJECT_NAME}_modules PUBLIC stdc++exp)
 endif()
 
+# A libstdc++ configured without atomic builtins (as WinLibs GCC 16.1.0 was)
+# makes its reference count helper (__gnu_cxx::__exchange_and_add, behind every
+# shared_ptr copy and release) a plain add under a mutex, while
+# weak_ptr::lock() and shared_from_this() update the same count with a
+# lock-free compare-and-swap that ignores that mutex. When the two race, an
+# update is lost and a shared_ptr frees an object still in use. The prebuilt
+# libstdc++ DLL and every vcpkg package carry that helper too, so no define of
+# ours can repair it: refuse such a toolchain. See
+# docs/bad_weak_ptr_postmortem.md; core/shared_ptr_unittest.cc checks it at
+# run time.
+include(CheckCXXSourceCompiles)
+check_cxx_source_compiles([[
+  #include <version>
+  #if defined(__GLIBCXX__) && !defined(_GLIBCXX_ATOMIC_WORD_BUILTINS)
+  #error libstdc++ built without atomic builtins
+  #endif
+  int main() {}
+]] LIBSTDCXX_HAS_ATOMIC_BUILTINS)
+if(NOT LIBSTDCXX_HAS_ATOMIC_BUILTINS)
+  message(FATAL_ERROR
+      "${CMAKE_CXX_COMPILER}'s libstdc++ was built without atomic builtins "
+      "(_GLIBCXX_ATOMIC_WORD_BUILTINS is undefined in bits/c++config.h), so "
+      "std::shared_ptr reference counts race. Use a toolchain built with "
+      "them, such as MSYS2 UCRT64 GCC.")
+endif()
+
 add_executable(${PROJECT_NAME} ${CMAKE_CURRENT_LIST_DIR}/main.cc)
 target_link_libraries(${PROJECT_NAME} PRIVATE ${PROJECT_NAME}_modules)
 
@@ -97,6 +123,21 @@ target_link_libraries(${PROJECT_NAME}_unittests PRIVATE
     GTest::gtest
     GTest::gmock
     GTest::gtest_main)
+
+# Ship the compiler's runtime DLLs next to each executable. Windows looks there
+# before PATH, so a run from any shell loads these, not another toolchain's
+# libstdc++-6.dll (an older WinLibs one, or Git for Windows').
+if(MINGW)
+  foreach(target IN ITEMS ${PROJECT_NAME} ${PROJECT_NAME}_unittests)
+    add_custom_command(TARGET ${target} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${COMPILER_BIN_DIR}/libstdc++-6.dll
+                ${COMPILER_BIN_DIR}/libgcc_s_seh-1.dll
+                ${COMPILER_BIN_DIR}/libwinpthread-1.dll
+                $<TARGET_FILE_DIR:${target}>
+        VERBATIM)
+  endforeach()
+endif()
 
 enable_testing()
 add_test(NAME ${PROJECT_NAME}_unittests COMMAND ${PROJECT_NAME}_unittests)

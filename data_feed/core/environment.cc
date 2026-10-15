@@ -1,7 +1,5 @@
 #include "core/environment.h"
 
-#include <sec_api/stdlib_s.h>
-
 #include <cstddef>
 #include <cstdlib>
 #include <optional>
