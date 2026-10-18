@@ -8,10 +8,12 @@
 #include <thread>
 #include <utility>
 
+#include "coinbase/adapter.h"
 #include "core/debug_log.h"
 #include "frontend/outbox.h"
 #include "frontend/server.h"
-#include "kraken/venue_manager.h"
+#include "kraken/adapter.h"
+#include "venue/l2_manager.h"
 #include "venue/manager.h"
 #include "venue/router.h"
 
@@ -29,7 +31,11 @@ int main() {
   try {
     venue::Router::Managers managers;
     managers.emplace(venue::Id::kKraken,
-                     std::make_unique<kraken::VenueManager>());
+                     std::make_unique<venue::L2Manager>(
+                         std::make_unique<kraken::Adapter>()));
+    managers.emplace(venue::Id::kCoinbase,
+                     std::make_unique<venue::L2Manager>(
+                         std::make_unique<coinbase::Adapter>()));
     // Declared in this order, so the server, which calls the router, goes
     // first, and the outbox, which every live subscription registers with,
     // goes last.

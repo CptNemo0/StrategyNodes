@@ -35,7 +35,8 @@ struct FileHeader {
 
   std::array<char, 8> magic;
   u32 format_version;
-  // Book depth subscribed to, one the venue supports (e.g. kraken::kL2Depths).
+  // Book depth subscribed to, one the venue supports (e.g. kraken::kL2Depths),
+  // or kFullDepth for a venue that always streams the full book.
   u32 depth;
   u32 price_decimals;
   u32 qty_decimals;

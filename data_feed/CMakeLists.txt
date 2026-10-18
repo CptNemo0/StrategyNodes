@@ -7,7 +7,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 # Each directory is one namespace. Listed explicitly, so a recursive glob over
 # the whole tree does not pick up build/.
-set(PROJECT_MODULES core crypto frontend kraken l2 net venue)
+set(PROJECT_MODULES coinbase core crypto frontend kraken l2 net venue)
 
 set(PROJECT_SOURCE_GLOBS)
 foreach(module IN LISTS PROJECT_MODULES)

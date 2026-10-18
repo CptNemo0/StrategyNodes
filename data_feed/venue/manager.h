@@ -4,6 +4,7 @@
 #include <expected>
 #include <functional>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -20,6 +21,7 @@ namespace venue {
 // The venues data_feed streams from.
 enum class Id : u8 {
   kKraken = 0,
+  kCoinbase = 1,
   kVenuesNum,
 };
 
@@ -75,7 +77,8 @@ struct SubscriptionInfo {
 struct PairList {
   // Its pairs, e.g. "BTC/USD", sorted.
   std::vector<std::string> symbols;
-  // The book depths it accepts, ascending.
+  // The book depths it accepts, ascending. Just l2::kFullDepth for a venue
+  // that always streams the full book.
   std::vector<u32> depths;
 };
 
@@ -103,6 +106,19 @@ struct Error {
   // Free text for the UI; never parsed.
   std::string detail;
 };
+
+// Thrown by a venue's REST lookups when it does not list a symbol, or lists it
+// but it cannot be streamed, so a caller can tell a mistyped symbol from a
+// venue that cannot be reached.
+class UnknownSymbolError : public std::runtime_error {
+ public:
+  using std::runtime_error::runtime_error;
+};
+
+// An Error to return from a function returning std::expected.
+inline std::unexpected<Error> Failure(Error::Code code, std::string detail) {
+  return std::unexpected{Error{.code = code, .detail = std::move(detail)}};
+}
 
 // Builds a subscription's receiver once the pair's precision is known.
 using ReceiverFactoryCallback =

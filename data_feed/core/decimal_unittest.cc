@@ -77,5 +77,24 @@ TEST(ScaleDecimalStringToI64Test, ScalesLargePricesAtHighPrecision) {
                 .expected = 12345678912345678});
 }
 
+// A step size's fraction digits ignore trailing zeros, which venues spell
+// differently ("0.01" and "0.01000000" are the same tick).
+TEST(FractionDigitsTest, CountsTheFractionDigitsUpToTheLastNonZeroOne) {
+  EXPECT_EQ(FractionDigits("0.01"), 2u);
+  EXPECT_EQ(FractionDigits("0.01000000"), 2u);
+  EXPECT_EQ(FractionDigits("0.00000001"), 8u);
+  EXPECT_EQ(FractionDigits("0.5"), 1u);
+  EXPECT_EQ(FractionDigits("22356.270000"), 2u);
+}
+
+// Whole numbers need no fraction digits, however they are spelled.
+TEST(FractionDigitsTest, IsZeroForAWholeNumber) {
+  EXPECT_EQ(FractionDigits("1"), 0u);
+  EXPECT_EQ(FractionDigits("10"), 0u);
+  EXPECT_EQ(FractionDigits("100."), 0u);
+  EXPECT_EQ(FractionDigits("100.000"), 0u);
+  EXPECT_EQ(FractionDigits("0"), 0u);
+}
+
 }  // namespace
 }  // namespace core

@@ -32,7 +32,7 @@ Key linting rules enforced: `bugprone-*`, `google-*`, `modernize-*`, `readabilit
 
 The project is structured around trading concerns as separate top-level directories:
 
-- `data_feed/` — market data ingestion from Kraken (currently a stub)
+- `data_feed/` — L2 market data ingestion from Kraken and Coinbase
 - `frontend/` — TypeScript/React node-graph strategy editor (Vite, React Flow); displays data streamed from C++ over WebSocket (see `frontend/README.md`)
 - `proto/` — protobuf definitions shared between C++ and the frontend; regenerate TS bindings with `npm run proto:gen` in `frontend/`
 
@@ -42,15 +42,16 @@ Each module is expected to grow its own sources within its directory.
 
 `data_feed/` is an executable, not a library: no `include/`/`source/` split. Each subdirectory is one top-level namespace (no root namespace; use `::net` etc. on a clash), headers and sources side by side, included from the `data_feed/` root (`#include "kraken/credentials.h"`). Header guards follow the path (`DATA_FEED_KRAKEN_CREDENTIALS_H_`). Names drop what the namespace already says (`kraken::Credentials`, not `KrakenCredentials`).
 
-- `core/` — project-independent building blocks: integer aliases, `Receiver`, SPSC helpers, `PipelineStatus`, time/decimal/env/crc utilities
+- `core/` — project-independent building blocks: integer aliases, `Receiver`, SPSC helpers, `PipelineStatus`, time/decimal/env/crc/JSON utilities
 - `crypto/` — base64, HMAC, SHA
 - `net/` — TLS context, one-shot HTTPS client, `WebsocketFeed`, `RawFrame` queue
 - `l2/` — venue-agnostic L2 data: `Message`, `PairPrecision`, `.bin` `FileHeader` and `FileWriter`
 - `frontend/` — the websocket `Server` for the TS frontend, the `Outbox` registry and the `Transmitter` each live subscription streams through; the only module using the generated protobuf types (`wire.h`)
-- `kraken/` — everything Kraken-specific: constants, credentials, REST calls, `L2MessageParser`, `VenueManager`
-- `venue/` — venue-agnostic command routing: the `Manager` interface each venue implements, and the `Router` that hands out subscription ids and reconnects venues
+- `kraken/` — everything Kraken-specific: constants, credentials, REST calls, checksum, `L2Decoder`, `Adapter`
+- `coinbase/` — everything Coinbase-specific (Advanced Trade, public `level2`): constants, product REST calls, `L2Decoder`, `Adapter`
+- `venue/` — venue-agnostic machinery: the `Manager` interface, `L2Manager` (the one `Manager` implementation, driven by a venue's `Adapter`), `L2Parser` (driven by a venue's `L2Decoder`), and the `Router` that hands out subscription ids and reconnects venues
 
-A new venue gets its own directory and namespace with plain classes (no `template <Venue>` specializations). New directories must be added to `PROJECT_MODULES` in `data_feed/CMakeLists.txt`.
+A new venue gets its own directory and namespace with plain classes (no `template <Venue>` specializations): an `Adapter` (endpoints, depths, symbol check, requests, REST lookups) and an `L2Decoder` (frames → `l2::Message`s), registered in `main.cc` as `venue::L2Manager{std::make_unique<x::Adapter>()}` under a new `venue::Id`, plus its `VENUE_*` in `proto/` and `frontend/wire.cc`. New directories must be added to `PROJECT_MODULES` in `data_feed/CMakeLists.txt`.
 
 ## Documentation
 

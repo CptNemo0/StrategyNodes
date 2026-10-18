@@ -38,6 +38,7 @@ package trading.market_data.v1;
 enum Venue {
   VENUE_UNSPECIFIED = 0;
   VENUE_KRAKEN = 1;
+  VENUE_COINBASE = 2;
 }
 
 // What a subscription does with its book.
@@ -69,7 +70,8 @@ message StreamInfo {
   uint64 stream_id = 1;
   string symbol = 2;
   string venue = 3;
-  // Book depth subscribed to at the venue.
+  // Book depth subscribed to at the venue; 0 for the full book, which is all
+  // a venue without a depth setting (Coinbase) streams.
   uint32 depth = 4;
   uint32 price_decimals = 5;
   uint32 qty_decimals = 6;
@@ -160,7 +162,7 @@ message Subscription {
   uint64 id = 1;
   Venue venue = 2;
   string symbol = 3;
-  // Book depth subscribed to at the venue.
+  // Book depth subscribed to at the venue; 0 for the full book.
   uint32 depth = 4;
   Sink sink = 5;
   // When it started, nanoseconds since the Unix epoch.
@@ -183,7 +185,8 @@ message Pair {
 message PairList {
   // Sorted by symbol.
   repeated Pair pairs = 1;
-  // Ascending.
+  // Ascending. Just 0, the full book, for a venue without a depth setting
+  // (Coinbase).
   repeated uint32 depths = 2;
 }
 
@@ -263,7 +266,8 @@ message Start {
   Venue venue = 1;
   // E.g. "BTC/USD".
   string symbol = 2;
-  // Must be one the venue accepts (kraken::kL2Depths).
+  // Must be one the venue accepts (PairList.depths): one of kraken::kL2Depths,
+  // or 0 (the full book, also what an unset depth reads as) for Coinbase.
   uint32 depth = 3;
   Sink sink = 4;
 }

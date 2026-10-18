@@ -149,6 +149,10 @@ wire::Venue ToWire(venue::Id venue) {
   switch (venue) {
     case venue::Id::kKraken:
       return wire::VENUE_KRAKEN;
+    case venue::Id::kCoinbase:
+      return wire::VENUE_COINBASE;
+    case venue::Id::kVenuesNum:
+      break;
   }
   return wire::VENUE_UNSPECIFIED;
 }
@@ -165,8 +169,14 @@ std::optional<venue::Sink> FromWire(wire::Sink sink) {
 }
 
 std::optional<venue::Id> FromWire(wire::Venue venue) {
-  return venue == wire::VENUE_KRAKEN ? std::optional{venue::Id::kKraken}
-                                     : std::nullopt;
+  switch (venue) {
+    case wire::VENUE_KRAKEN:
+      return venue::Id::kKraken;
+    case wire::VENUE_COINBASE:
+      return venue::Id::kCoinbase;
+    default:
+      return std::nullopt;
+  }
 }
 
 }  // namespace frontend

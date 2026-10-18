@@ -44,4 +44,13 @@ i64 ScaleDecimalStringToI64(std::string_view value, u32 decimals) {
          fraction_value * Pow10(decimals - static_cast<u32>(digits_used));
 }
 
+u32 FractionDigits(std::string_view value) {
+  const std::size_t dot = value.find('.');
+  if (dot == std::string_view::npos) {
+    return 0;
+  }
+  const std::size_t last_digit = value.find_last_not_of('0');
+  return last_digit <= dot ? 0 : static_cast<u32>(last_digit - dot);
+}
+
 }  // namespace core

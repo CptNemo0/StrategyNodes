@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "core/aliasing.h"
+#include "l2/book_spec.h"
 #include "l2/message.h"
 
 namespace l2 {
@@ -82,6 +83,20 @@ TEST(BookTest, DropsWhatFallsBeyondTheDepth) {
       MakeMessage(Message::Type::kUpdate, {{.price = 11, .quantity = 0}}, {}));
 
   EXPECT_THAT(book.bids(), ElementsAre(Pair(10, 1)));
+}
+
+// At kFullDepth the book keeps every level, as the venue sends them all.
+TEST(BookTest, KeepsEveryLevelAtFullDepth) {
+  Book book{kFullDepth};
+
+  book.Apply(MakeMessage(Message::Type::kSnapshot,
+                         {{.price = 10, .quantity = 1},
+                          {.price = 9, .quantity = 1},
+                          {.price = 8, .quantity = 1}},
+                         {{.price = 11, .quantity = 1}}));
+
+  EXPECT_THAT(book.bids(), ElementsAre(Pair(10, 1), Pair(9, 1), Pair(8, 1)));
+  EXPECT_THAT(book.asks(), ElementsAre(Pair(11, 1)));
 }
 
 TEST(BookTest, EmptiesOnClear) {

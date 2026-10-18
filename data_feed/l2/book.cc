@@ -4,6 +4,7 @@
 #include <span>
 
 #include "core/aliasing.h"
+#include "l2/book_spec.h"
 #include "l2/message.h"
 
 namespace l2 {
@@ -21,7 +22,7 @@ void ApplyLevels(std::span<const Message::Level> levels,
       side.insert_or_assign(level.price, level.quantity);
     }
   }
-  if (side.size() > depth) {
+  if (depth != kFullDepth && side.size() > depth) {
     side.erase(std::next(side.begin(), depth), side.end());
   }
 }

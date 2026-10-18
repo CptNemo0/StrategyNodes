@@ -24,7 +24,7 @@ namespace frontend {
 // so the Outbox can let go of its own lock before a Watch builds a snapshot.
 //
 // Keeps the book as the messages leave it, truncated to its depth as the
-// venue's checksum expects, so that a client can start watching at any time:
+// venue's checksum expects (or whole, at l2::kFullDepth), so that a client can start watching at any time:
 // it gets a StreamInfo and a snapshot of the book, then every message after
 // it. Each message is serialized once, however many clients watch.
 //
@@ -47,7 +47,9 @@ class Stream {
   Stream& operator=(const Stream&) = delete;
 
   // Applies the message to the book and sends it to every watcher. The work
-  // is bounded by the depth, and sending only queues.
+  // is bounded by the depth, or by the message at l2::kFullDepth (a full
+  // Coinbase snapshot runs to tens of thousands of levels), and sending only
+  // queues.
   void Receive(const l2::Message& message);
 
   // The stream has a gap, for the reason `gap` gives.

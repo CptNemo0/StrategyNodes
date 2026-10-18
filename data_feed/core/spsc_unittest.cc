@@ -181,7 +181,7 @@ TEST(DrainTest, ReportsAThrowingConsumerAndStopsConsuming) {
   EXPECT_THAT(consumed, ElementsAre(0, 1));
   EXPECT_EQ(failures, 1);
   // The bad message and what follows it are left for whoever recovers the
-  // pipeline (e.g. VenueManager resets the queue).
+  // pipeline (e.g. venue::L2Manager resets the queue).
   EXPECT_THAT(PopAll(queue), ElementsAre(2, 3));
 }
 

@@ -9,7 +9,7 @@
 namespace kraken {
 
 // The only depths Kraken's L2 "book" channel accepts.
-inline constexpr std::array<u64, 5> kL2Depths = {10, 25, 100, 500, 1000};
+inline constexpr std::array<u32, 5> kL2Depths = {10, 25, 100, 500, 1000};
 
 // I assume that the initial snapshot of the orderbook is the longest message
 // that will ever be sent. Since the Kraken's L2 orderbook channel fetches only

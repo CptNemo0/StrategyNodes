@@ -12,8 +12,8 @@ flowchart LR
     subgraph Main["Main thread"]
         MAIN["main()<br/>SIGINT → stop_requested"]
         ROUTER["venue::Router<br/>global ids<br/>builds FileWriter / Transmitter"]
-        VM["kraken::VenueManager : venue::Manager<br/>life_cycle_mutex_<br/>subscriptions_: id → {symbol, depth, sink, start, receiver}<br/>at most one per symbol"]
-        PREC["kraken::FetchPairPrecision<br/>on every Subscribe"]
+        VM["venue::L2Manager : venue::Manager<br/>built from a kraken::Adapter<br/>life_cycle_mutex_<br/>subscriptions_: id → {symbol, depth, sink, start, receiver}<br/>at most one per symbol"]
+        PREC["Adapter::FetchPrecision<br/>(kraken: AssetPairs)<br/>on every Subscribe"]
     end
 
     SUP["Supervisor thread: venue::Router<br/>every 100 ms: Connect() each unhealthy venue<br/>backoff 1 s, doubling up to 30 s"]
@@ -26,8 +26,8 @@ flowchart LR
     RAWLOG[/"kraken_l2_messages-&lt;ns&gt;.txt<br/>raw JSON log"/]
     RFQ[["RawFrameQueue<br/>SPSC, cap 256<br/>RawFrame{json, capture_time_ns}"]]
 
-    subgraph Parse["Parser thread: kraken::L2MessageParser"]
-        DISPATCH["Dispatch()<br/>rapidjson, numbers as strings<br/>filter channel == book"]
+    subgraph Parse["Parser thread: venue::L2Parser"]
+        DISPATCH["Dispatch() → kraken::L2Decoder<br/>rapidjson, numbers as strings<br/>filter channel == book"]
         ROUTES{"routes_<br/>symbol → Route<br/>{PairPrecision, Receiver*, awaiting_snapshot}<br/>routes_mutex_"}
         SCALE["ScaleDecimalStringToI64<br/>ParseChecksum / ParseVenueTime"]
     end
@@ -95,7 +95,7 @@ is lost. A gap opens in two ways, and both end with a fresh snapshot.
 
 - **A dropped connection.** The parser waits for a fresh snapshot of every
   pair on each `Start()`, and when a connection that was up ends,
-  `VenueManager::DisconnectLocked()` calls
+  `L2Manager::DisconnectLocked()` calls
   `Receiver::OnGap(core::Gap::kDisconnected)` on every subscription's
   receiver, once the parser has drained, so never alongside `Receive()`.
 - **A checksum mismatch.** The parser keeps every pair's `l2::Book` at its
@@ -105,7 +105,7 @@ is lost. A gap opens in two ways, and both end with a fresh snapshot.
   fixed-point integers are exactly those digits, so no string formatting is
   needed. On a mismatch it drops the frame, calls
   `OnGap(core::Gap::kResubscribing)` on the pair's receiver, drops the pair's
-  updates until its next snapshot, and tells the `VenueManager`, whose
+  updates until its next snapshot, and tells the `L2Manager`, whose
   resubscriber thread sends Kraken an unsubscribe and then a subscribe for
   the pair on the live connection. Kraken answers in order: updates already
   in flight (dropped), both acknowledgements, then the new snapshot. The
@@ -133,31 +133,31 @@ What the receivers do with a gap:
 sequenceDiagram
     autonumber
     participant M as main
-    participant VM as kraken::VenueManager
-    participant P as kraken::L2MessageParser
+    participant VM as venue::L2Manager (kraken::Adapter)
+    participant P as venue::L2Parser
     participant F as net::WebsocketFeed
     participant K as Kraken REST/WS
     participant R as l2::FileWriter / frontend::Transmitter
     participant RT as venue::Router
 
     M->>VM: construct
-    Note over VM: kraken::Credentials::FromEnvironment()<br/>build parser and feed sharing RawFrameQueue and PipelineStatus
+    Note over VM: kraken::Adapter loads kraken::Credentials::FromEnvironment()<br/>build parser and feed sharing RawFrameQueue and PipelineStatus
 
-    M->>RT: construct with {kKraken: VenueManager}
+    M->>RT: construct with {kKraken, kCoinbase: L2Manager}
     Note over RT: starts the supervisor thread
     RT->>VM: Connect(), since healthy() is false
     VM->>VM: DisconnectLocked(), status_.Reset()
-    VM->>P: Start() spawns parser thread
+    VM->>P: Start(adapter.MakeDecoder()) spawns parser thread
     VM->>F: Connect()
     F->>K: TCP + TLS + WS handshake
     F->>F: open raw log, spawn network thread
-    VM->>F: Send(subscribe) for every subscription, none yet
+    VM->>F: Send(adapter.ConnectRequests()), then a subscribe for every subscription, none yet
 
     loop BTC/USD@100 kRecord, ETH/USD@100 kLive
         M->>RT: Subscribe(kKraken, symbol, 100, sink)
         RT->>VM: Subscribe(next id, symbol, 100, sink, factory)
         Note over VM: kSymbolInUse if the symbol is taken,<br/>the existing id for a duplicate recording
-        VM->>K: kraken::FetchPairPrecision via AssetPairs
+        VM->>K: kraken::Adapter::FetchPrecision via AssetPairs
         K-->>VM: price_decimals, qty_decimals
         VM->>R: create (a writer opens its .bin and writes l2::FileHeader)
         VM->>P: Attach(symbol, precision, receiver)
@@ -172,11 +172,87 @@ sequenceDiagram
     end
 
     M->>RT: ~Router(): stop the supervisor, destroy the managers
-    RT->>VM: ~VenueManager()
+    RT->>VM: ~L2Manager()
     VM->>F: Disconnect(): stop network thread, WS close, close raw log
     VM->>P: Stop(): drain queue, join
     Note over VM: subscriptions_ destroyed → each writer drains,<br/>closes and renames to SYMBOL-start-end.bin
 ```
+
+## Venues: one manager, an Adapter and an L2Decoder each
+
+Everything about a venue's L2 stream except its wire format is the same for
+every venue, so it lives in `venue/` once:
+
+- `venue::L2Manager` is the only `venue::Manager`: the subscription table,
+  the duplicate-recording rule, `List()`, the 5 minute `ListPairs()` cache,
+  connect / disconnect / gaps, and the checksum resubscriber. It owns the
+  `net::WebsocketFeed` (raw log `<venue>_l2_messages-<ns>.txt`) and an
+  `L2Parser`, and asks its `venue::Adapter` for everything venue-specific:
+  `name()`, `endpoints()`, `depths()`, `book_checksum()` (null if the venue
+  sends none, in which case no book is kept and nothing is resubscribed),
+  `CheckSymbol()`, `FetchPrecision()`, `FetchPairs()`, `ConnectRequests()`
+  (frames sent before any subscription), `MakeBookRequest()` and
+  `MakeDecoder()`.
+- `venue::L2Parser` routes, holds back updates until each pair's snapshot,
+  and runs the checksum check. It gets the book changes from a
+  `venue::L2Decoder`, built afresh for every connection so whatever a decoder
+  tracks across frames (Coinbase's sequence number) starts over with it. The
+  decoder asks `Output::Find(symbol, type)` for the pair's precision before
+  parsing levels, so changes that would be dropped are never parsed, and
+  hands each change to `Output::Emit()`. A decoder that throws fails the
+  pipeline, which the Router turns into a reconnect with fresh snapshots.
+- `venue::CallVenue()` maps a REST call's exceptions to `venue::Error`
+  (`venue::UnknownSymbolError`, which `kraken::UnknownPairError` and
+  `coinbase::UnknownProductError` derive from, to `kUnknownSymbol`, anything
+  else to `kVenueFailed`), and `venue::IsWellFormedSymbol()` keeps a client's
+  symbol from adding anything to a request.
+
+Composition rather than inheritance: the manager's and the parser's threads
+call into the venue's code, and a base class calling virtual hooks from its
+own threads could reach a derived class already destroyed.
+
+| | Kraken | Coinbase |
+|---|---|---|
+| Feed | `wss://ws.kraken.com/v2`, `book` | `wss://advanced-trade-ws.coinbase.com`, `level2` (no JWT) |
+| Depths | `kraken::kL2Depths` | `l2::kFullDepth` (0) only |
+| Checksum | CRC32 of the top 10 levels | none; continuity checks instead |
+| On connect | nothing | subscribe to `heartbeats` |
+| Precision | AssetPairs `pair_decimals` / `lot_decimals` | fraction digits of `price_increment` / `base_increment` |
+| Pairs | AssetPairs with status `online` | products `online`, tradable, not an `alias` |
+
+## Coinbase
+
+Coinbase Advanced Trade's public `level2` channel needs no credentials, has
+no depth setting and sends no checksum.
+
+- **Full depth.** A Coinbase subscription is at `l2::kFullDepth` (0, which
+  is also what an unset depth reads as on the wire); `l2::Book` at that depth
+  keeps every level, so `frontend::Stream` never truncates a book whose outer
+  levels Coinbase would never resend. Snapshots are big: BTC-USD's was
+  41,154 levels, 4.5 MB of JSON, on 2026-10-18, against Beast's default 16 MB
+  message limit.
+- **Heartbeats first.** `ConnectRequests()` subscribes to `heartbeats` as
+  soon as the socket is up: Coinbase drops a connection that subscribes to
+  nothing within 5 seconds, and otherwise idles channels out after a minute
+  without updates.
+- **Continuity instead of a checksum.** `coinbase::L2Decoder` throws, and so
+  reconnects every product for fresh snapshots, when `sequence_num` skips
+  (it numbers every frame of the connection across channels: a recording on
+  2026-10-18 had 249 frames and no gaps), when `heartbeat_counter` skips, or
+  when a level breaks the product's rules (side not `bid` / `offer`, a
+  negative quantity, or more fraction digits than the product's increments,
+  meaning they changed). A frame numbered at or below the last is out of
+  order and skipped. `error` frames are logged.
+- **Aliases.** Public channels send a `-USDC` product's data under its
+  `-USD` alias (the product's `alias`), so a subscription to the `-USDC` id
+  would see nothing: `ListPairs` leaves aliased products out and `Subscribe`
+  refuses them with `kUnknownSymbol`, naming the product to use.
+- **Not built yet** (to add once recordings justify them): a heartbeat
+  watchdog tighter than the feed's 10 s idle timeout, crossed-book and
+  ticker cross-checks, the periodic REST book reconcile, and throttling to
+  Coinbase's 8 messages per second per IP. A reconnect sends one subscribe
+  per subscription plus the heartbeats one, so more than 7 subscriptions can
+  exceed it.
 
 ## Frontend control API
 
@@ -188,7 +264,9 @@ should expose the port before there is.
 
 ### Commands
 
-One venue for now, so it defaults to kraken.
+Commands that name a venue take `VENUE_KRAKEN` or `VENUE_COINBASE`; the
+rows below show Kraken. Coinbase's only depth is 0, the full book (see
+Coinbase above).
 
 | CLI | Request | Reply |
 |---|---|---|
@@ -210,8 +288,8 @@ subscription id, so `Watch{3}` yields `StreamInfo{stream_id: 3}` and
 guess one. Kraken's are its AssetPairs whose status is `online`, fetched by
 `kraken::FetchTradablePairs()`; with `assetVersion=1` their keys are the
 websocket v2 symbols (`BTC/USD`, not `XBT/USD`), so they go into `Start` as
-they are. The full response is some 700 KB, so `kraken::VenueManager` keeps
-the list for 5 minutes, under a lock of its own that is held across the
+they are. The full response is some 700 KB, so `venue::L2Manager` keeps
+any venue's list for 5 minutes, under a lock of its own that is held across the
 fetch, so concurrent callers share one fetch and no subscription waits on it.
 
 ### Wire protocol
@@ -258,7 +336,7 @@ flowchart LR
         ROUTER["venue::Router<br/>allocates global ids"]
         MGR["venue::Manager<br/>Subscribe / Unsubscribe / List"]
     end
-    KVM["kraken::VenueManager"]
+    KVM["venue::L2Manager<br/>kraken::Adapter / coinbase::Adapter"]
 
     SRV --> ROUTER
     ROUTER -- "factory: Transmitter(outbox, id) or FileWriter" --> MGR

@@ -2,18 +2,18 @@
 #define DATA_FEED_KRAKEN_PAIR_PRECISION_H_
 
 #include <span>
-#include <stdexcept>
 #include <string>
 
 #include "l2/pair_precision.h"
+#include "venue/manager.h"
 
 namespace kraken {
 
 // Thrown when Kraken does not list a requested symbol, so a caller can tell a
 // mistyped symbol from a venue that cannot be reached.
-class UnknownPairError : public std::runtime_error {
+class UnknownPairError : public venue::UnknownSymbolError {
  public:
-  using std::runtime_error::runtime_error;
+  using venue::UnknownSymbolError::UnknownSymbolError;
 };
 
 // Queries Kraken's public AssetPairs endpoint for `symbols` (e.g. "BTC/USD")

@@ -5,12 +5,13 @@
 #include <map>
 
 #include "core/aliasing.h"
+#include "l2/book_spec.h"
 #include "l2/message.h"
 
 namespace l2 {
 
-// A pair's book at one depth, as its Messages leave it. Prices and
-// quantities are the Messages' fixed-point integers.
+// A pair's book at one depth, or at kFullDepth, as its Messages leave it.
+// Prices and quantities are the Messages' fixed-point integers.
 class Book {
  public:
   // Price to quantity, best price first.
@@ -22,7 +23,8 @@ class Book {
   // A snapshot replaces the book; an update sets each level it carries, where
   // a zero quantity removes the level. Either way, whatever lies beyond the
   // depth is then dropped: a venue maintaining a book at that depth sends the
-  // levels that move into it, but not the removal of those pushed out.
+  // levels that move into it, but not the removal of those pushed out. At
+  // kFullDepth nothing is dropped.
   void Apply(const Message& message);
 
   void Clear();
