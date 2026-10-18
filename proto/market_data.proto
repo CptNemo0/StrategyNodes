@@ -187,6 +187,21 @@ message PairList {
   repeated uint32 depths = 2;
 }
 
+// One venue the backend has a connection to manage.
+message VenueInfo {
+  Venue venue = 1;
+  // E.g. "kraken".
+  string name = 2;
+  // Whether its connection is up; the backend keeps reconnecting one that
+  // is not.
+  bool connected = 3;
+}
+
+message VenueList {
+  // Ordered by venue.
+  repeated VenueInfo venues = 1;
+}
+
 // Why a command failed.
 message CommandError {
   enum Code {
@@ -234,6 +249,8 @@ message CommandResult {
     CommandError error = 5;
     // ListPairs.
     PairList pairs = 6;
+    // ListVenues.
+    VenueList venues = 7;
   }
 }
 
@@ -275,6 +292,10 @@ message ListPairs {
   Venue venue = 1;
 }
 
+// Lists the venues the backend manages, and whether each is connected, so
+// a client can pick one to ListPairs of.
+message ListVenues {}
+
 // Every frame a client sends.
 message ClientCommand {
   // Chosen by the client and echoed in the CommandResult.
@@ -288,6 +309,7 @@ message ClientCommand {
     Unwatch unwatch = 6;
     // Past the fields reserved below.
     ListPairs list_pairs = 16;
+    ListVenues list_venues = 17;
   }
 
   // Playback: ListRecordings, Play, PlaybackNext, StopPlayback.
