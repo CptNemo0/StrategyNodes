@@ -7,6 +7,7 @@
 #include <flat_map>
 #include <memory>
 #include <stop_token>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -43,6 +44,14 @@ class Router {
     SubscriptionInfo subscription;
   };
 
+  // One venue, and whether its connection is up.
+  struct VenueStatus {
+    Id venue;
+    // The manager's name(), e.g. "kraken".
+    std::string_view name;
+    bool connected;
+  };
+
   // Starts connecting every manager. Live subscriptions register with
   // `outbox`, which must outlive the Router.
   Router(Managers managers, frontend::Outbox& outbox, Backoff backoff = {});
@@ -69,6 +78,10 @@ class Router {
 
   // Every subscription of every venue.
   std::vector<Listing> List() const;
+
+  // Every venue there is a manager for, ordered by Id. A venue that is not
+  // connected is being reconnected.
+  std::vector<VenueStatus> ListVenues() const;
 
   // The pairs `venue` can stream and the depths it accepts. May block for a
   // round trip to the venue.

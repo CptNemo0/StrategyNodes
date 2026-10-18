@@ -262,6 +262,29 @@ TEST_F(RouterTest, PassesOnTheVenuesError) {
             Error::Code::kUnknownId);
 }
 
+TEST_F(RouterTest, ListsEveryVenueWithItsConnection) {
+  Start();
+  ASSERT_TRUE(WaitUntil([this] { return fake_.healthy(); }));
+
+  EXPECT_THAT(router().ListVenues(),
+              ElementsAre(FieldsAre(Id::kKraken, "fake", true)));
+}
+
+TEST_F(RouterTest, ListsAVenueStillConnectingAsNotConnected) {
+  fake_.FailConnects(1'000'000);
+  Start(
+      Backoff{.initial = std::chrono::hours{1}, .max = std::chrono::hours{1}});
+
+  EXPECT_THAT(router().ListVenues(),
+              ElementsAre(FieldsAre(Id::kKraken, "fake", false)));
+}
+
+TEST_F(RouterTest, ListsNoVenuesWithoutAManager) {
+  router_.emplace(Router::Managers{}, outbox_, kFastBackoff);
+
+  EXPECT_THAT(router().ListVenues(), IsEmpty());
+}
+
 TEST_F(RouterTest, ListsTheVenuesPairs) {
   fake_.AnswerListPairs(
       PairList{.symbols = {"BTC/USD", "ETH/USD"}, .depths = {10, 100}});

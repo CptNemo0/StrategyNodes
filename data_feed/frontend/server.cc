@@ -453,6 +453,8 @@ wire::CommandResult Server::Run(Session& session,
         return Unwatch(session);
       case wire::ClientCommand::kListPairs:
         return ListPairs(command.list_pairs());
+      case wire::ClientCommand::kListVenues:
+        return ListVenues();
       case wire::ClientCommand::COMMAND_NOT_SET:
         break;
     }
@@ -567,6 +569,19 @@ wire::CommandResult Server::ListPairs(const wire::ListPairs& list_pairs) {
     listed.mutable_depths()->Add(pairs.depths.begin(), pairs.depths.end());
     return result;
   });
+}
+
+wire::CommandResult Server::ListVenues() const {
+  wire::CommandResult result;
+  google::protobuf::RepeatedPtrField<wire::VenueInfo>& venues =
+      *result.mutable_venues()->mutable_venues();
+  for (const venue::Router::VenueStatus& status : router_.ListVenues()) {
+    wire::VenueInfo& added = *venues.Add();
+    added.set_venue(ToWire(status.venue));
+    added.set_name(std::string{status.name});
+    added.set_connected(status.connected);
+  }
+  return result;
 }
 
 void Server::Forget(const std::shared_ptr<Session>& session) {

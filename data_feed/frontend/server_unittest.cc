@@ -248,6 +248,12 @@ wire::ClientCommand ListPairsCommand(wire::Venue venue) {
   return command;
 }
 
+wire::ClientCommand ListVenuesCommand() {
+  wire::ClientCommand command;
+  command.mutable_list_venues();
+  return command;
+}
+
 wire::ClientCommand WatchCommand(u64 id) {
   wire::ClientCommand command;
   command.mutable_watch()->set_id(id);
@@ -343,6 +349,19 @@ TEST_F(ServerTest, ListsTheVenuesPairs) {
   EXPECT_EQ(result.pairs().pairs(0).symbol(), "BTC/USD");
   EXPECT_EQ(result.pairs().pairs(1).symbol(), "ETH/USD");
   EXPECT_THAT(result.pairs().depths(), ElementsAre(10u, 100u));
+}
+
+TEST_F(ServerTest, ListsTheVenues) {
+  Client client = Connect();
+
+  const wire::CommandResult result = client.Command(ListVenuesCommand());
+
+  ASSERT_TRUE(result.has_venues());
+  ASSERT_THAT(result.venues().venues(), SizeIs(1));
+  const wire::VenueInfo& venue = result.venues().venues(0);
+  EXPECT_EQ(venue.venue(), wire::VENUE_KRAKEN);
+  EXPECT_EQ(venue.name(), "fake");
+  EXPECT_TRUE(venue.connected());
 }
 
 TEST_F(ServerTest, PassesOnTheVenuesErrorListingPairs) {

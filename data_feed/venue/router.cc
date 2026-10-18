@@ -120,6 +120,16 @@ std::vector<Router::Listing> Router::List() const {
   return listings;
 }
 
+std::vector<Router::VenueStatus> Router::ListVenues() const {
+  return managers_ | std::views::transform([](const auto& entry) {
+           const auto& [venue, manager] = entry;
+           return VenueStatus{.venue = venue,
+                              .name = manager->name(),
+                              .connected = manager->healthy()};
+         }) |
+         std::ranges::to<std::vector>();
+}
+
 std::expected<PairList, Error> Router::ListPairs(Id venue) {
   const auto manager = managers_.find(venue);
   return manager == managers_.end() ? std::unexpected{UnknownVenue(venue)}
