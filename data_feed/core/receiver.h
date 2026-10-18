@@ -10,10 +10,10 @@ namespace core {
 // Why a subscription's stream has a gap.
 enum class Gap : u8 {
   // The venue connection carrying it ended.
-  kDisconnected,
+  kDisconnected = 0,
   // Its book stopped matching the venue's checksum, so it is being
   // resubscribed for a fresh snapshot.
-  kResubscribing,
+  kResubscribing = 1,
 };
 
 // Consumes the messages of one subscription. Knows what to do with them, not

@@ -1,11 +1,11 @@
-#include "core/crc32.h"
+#include "crypto/crc32.h"
 
 #include <array>
 #include <string_view>
 
 #include "core/aliasing.h"
 
-namespace core {
+namespace crypto {
 
 namespace {
 
@@ -33,4 +33,4 @@ u32 Crc32(std::string_view data) {
   return crc ^ 0xFFFFFFFFu;
 }
 
-}  // namespace core
+}  // namespace crypto

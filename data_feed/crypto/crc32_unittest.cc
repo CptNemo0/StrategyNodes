@@ -1,4 +1,4 @@
-#include "core/crc32.h"
+#include "crypto/crc32.h"
 
 #include <gtest/gtest.h>
 
@@ -8,7 +8,7 @@
 
 #include "core/aliasing.h"
 
-namespace core {
+namespace crypto {
 namespace {
 
 using ::testing::Message;
@@ -50,4 +50,4 @@ TEST(Crc32Test, TreatsBytesAboveSevenBitsAsUnsigned) {
 }
 
 }  // namespace
-}  // namespace core
+}  // namespace crypto

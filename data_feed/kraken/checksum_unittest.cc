@@ -8,7 +8,7 @@
 #include <vector>
 
 #include "core/aliasing.h"
-#include "core/crc32.h"
+#include "crypto/crc32.h"
 #include "l2/book.h"
 #include "l2/message.h"
 
@@ -65,7 +65,7 @@ l2::Book MakeBook(u32 depth,
 }
 
 TEST(ChecksumTest, UsesTheCrc32KrakenUses) {
-  EXPECT_EQ(core::Crc32(kDocsChecksumInput), kDocsChecksum);
+  EXPECT_EQ(crypto::Crc32(kDocsChecksumInput), kDocsChecksum);
 }
 
 TEST(ChecksumTest, MatchesKrakensWorkedExample) {

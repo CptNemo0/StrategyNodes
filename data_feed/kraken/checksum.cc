@@ -6,7 +6,7 @@
 #include <string>
 
 #include "core/aliasing.h"
-#include "core/crc32.h"
+#include "crypto/crc32.h"
 #include "l2/book.h"
 
 namespace kraken {
@@ -28,7 +28,7 @@ u32 BookChecksum(const l2::Book& book) {
   std::string text;
   AppendSide(book.asks(), text);
   AppendSide(book.bids(), text);
-  return core::Crc32(text);
+  return crypto::Crc32(text);
 }
 
 }  // namespace kraken

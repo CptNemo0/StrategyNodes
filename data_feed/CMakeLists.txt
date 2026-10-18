@@ -60,7 +60,7 @@ target_link_libraries(market_data_proto PUBLIC protobuf::libprotobuf)
 
 # Every module, compiled once and linked into both data_feed and
 # data_feed_unittests. An object library rather than a static one, so objects
-# nothing references by name (e.g. the contract violation handler) still link.
+# nothing references by name still link.
 add_library(${PROJECT_NAME}_modules OBJECT ${PROJECT_SOURCES})
 target_include_directories(${PROJECT_NAME}_modules PUBLIC
     ${CMAKE_CURRENT_LIST_DIR})
