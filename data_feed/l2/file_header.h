@@ -7,6 +7,7 @@
 #include <type_traits>
 
 #include "core/aliasing.h"
+#include "l2/book_spec.h"
 #include "l2/pair_precision.h"
 
 namespace l2 {
@@ -49,11 +50,10 @@ static_assert(sizeof(FileHeader) == 64,
               "FileHeader is written as raw bytes, so its size is part of the "
               "file format");
 
-// Builds the preamble for a recording of `symbol` at `depth`. `venue` and
-// `symbol` are truncated to kTextSize characters.
+// Builds the preamble for a recording of `book`. `venue` and the symbol are
+// truncated to kTextSize characters.
 FileHeader MakeFileHeader(std::string_view venue,
-                          std::string_view symbol,
-                          u32 depth,
+                          const BookSpec& book,
                           const PairPrecision& precision,
                           i64 start_time_ns);
 

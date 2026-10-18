@@ -13,15 +13,16 @@
 #include <print>
 #include <ranges>
 #include <stop_token>
-#include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
 #include "core/aliasing.h"
+#include "core/debug_log.h"
 #include "core/receiver.h"
 #include "frontend/outbox.h"
 #include "frontend/transmitter.h"
+#include "l2/book_spec.h"
 #include "l2/file_writer.h"
 #include "l2/message.h"
 #include "l2/pair_precision.h"
@@ -37,18 +38,18 @@ constexpr std::chrono::milliseconds kSupervisePeriod{100};
 // Builds the receiver of subscription `id`: a frontend::Transmitter bound to
 // `outbox` for kLive, an l2::FileWriter for kRecord.
 template <Sink sink>
-ReceiverFactory MakeReceiverFactory(frontend::Outbox& outbox,
-                                    SubscriptionId id,
-                                    std::string_view venue,
-                                    const std::string& symbol,
-                                    u32 depth) {
-  return [&outbox, id, venue, symbol, depth](const l2::PairPrecision& precision)
+ReceiverFactoryCallback MakeReceiverFactoryCallback(frontend::Outbox& outbox,
+                                                    SubscriptionId id,
+                                                    std::string_view venue,
+                                                    l2::BookSpec book) {
+  return [&outbox, id, venue,
+          book = std::move(book)](const l2::PairPrecision& precision)
              -> std::unique_ptr<core::Receiver<l2::Message>> {
     if constexpr (sink == Sink::kRecord) {
-      return std::make_unique<l2::FileWriter>(venue, symbol, depth, precision);
+      return std::make_unique<l2::FileWriter>(venue, book, precision);
     } else {
-      return std::make_unique<frontend::Transmitter>(outbox, id, venue, symbol,
-                                                     depth, precision);
+      return std::make_unique<frontend::Transmitter>(outbox, id, venue, book,
+                                                     precision);
     }
   };
 }
@@ -69,37 +70,41 @@ Router::Router(Managers managers, frontend::Outbox& outbox, Backoff backoff)
 Router::~Router() = default;
 
 template <Sink sink>
-std::expected<SubscriptionId, Error>
-Router::Subscribe(Id venue, const std::string& symbol, u32 depth) {
+std::expected<SubscriptionId, Error> Router::Subscribe(Id venue,
+                                                       l2::BookSpec book) {
   const auto manager = managers_.find(venue);
   if (manager == managers_.end()) {
     return std::unexpected{UnknownVenue(venue)};
   }
-  const SubscriptionId id = next_id_++;
-  return manager->second->Subscribe(
-      id, symbol, depth, sink,
-      MakeReceiverFactory<sink>(outbox_, id, manager->second->name(), symbol,
-                                depth));
+  const u64 counter = next_counter_++;
+  if (counter > kMaxSubscriptionsAllowed) {
+    return std::unexpected{
+        Error{.code = Error::Code::kIdsExhausted,
+              .detail = std::format("All {} subscription ids are taken",
+                                    kMaxSubscriptionsAllowed)}};
+  }
+  const SubscriptionId id = MakeSubscriptionId(counter, venue, sink);
+  // Built first, as it copies `book` before the venue takes it.
+  ReceiverFactoryCallback make_receiver = MakeReceiverFactoryCallback<sink>(
+      outbox_, id, manager->second->name(), book);
+  return manager->second->Subscribe(id, std::move(book),
+                                    std::move(make_receiver));
 }
 
-template std::expected<SubscriptionId, Error>
-Router::Subscribe<Sink::kLive>(Id venue, const std::string& symbol, u32 depth);
+template std::expected<SubscriptionId, Error> Router::Subscribe<Sink::kLive>(
+    Id venue,
+    l2::BookSpec book);
 template std::expected<SubscriptionId, Error> Router::Subscribe<Sink::kRecord>(
     Id venue,
-    const std::string& symbol,
-    u32 depth);
+    l2::BookSpec book);
 
-std::expected<void, Error> Router::Unsubscribe(SubscriptionId id, Sink sink) {
-  for (const std::unique_ptr<Manager>& manager : managers_.values()) {
-    std::expected<void, Error> unsubscribed = manager->Unsubscribe(id, sink);
-    // Any other answer comes from the venue that has the id.
-    if (unsubscribed || unsubscribed.error().code != Error::Code::kUnknownId) {
-      return unsubscribed;
-    }
-  }
-  return std::unexpected{
-      Error{.code = Error::Code::kUnknownId,
-            .detail = std::format("No subscription {}", id)}};
+std::expected<void, Error> Router::Unsubscribe(SubscriptionId id) {
+  const auto manager = managers_.find(VenueOf(id));
+  return manager == managers_.end()
+             ? std::unexpected{Error{
+                   .code = Error::Code::kUnknownId,
+                   .detail = std::format("No subscription {}", id)}}
+             : manager->second->Unsubscribe(id);
 }
 
 std::vector<Router::Listing> Router::List() const {
@@ -147,6 +152,7 @@ void Router::Supervise(const std::stop_token& stop) {
       }
       try {
         manager->Connect();
+        DEBUG_LOG("Connected to {}", manager->name());
         retry.delay = backoff_.initial;
       } catch (const std::exception& e) {
         std::println(stderr, "Connecting to {} failed, retrying in {}: {}",

@@ -6,20 +6,22 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "core/aliasing.h"
 #include "core/receiver.h"
+#include "l2/book_spec.h"
 #include "l2/message.h"
 #include "l2/pair_precision.h"
 
 namespace venue {
 
 // The venues data_feed streams from.
-enum class Id : u8 { kKraken };
-
-// Identifies a subscription across every venue. Handed out by the Router.
-using SubscriptionId = u64;
+enum class Id : u8 {
+  kKraken = 0,
+  kVenuesNum,
+};
 
 // What a subscription does with its book.
 enum class Sink : u8 {
@@ -34,14 +36,38 @@ constexpr std::string_view SinkName(Sink sink) {
   return sink == Sink::kRecord ? "a recording" : "a live feed";
 }
 
-// One subscription, as listed to the frontend.
+// Identifies a subscription across every venue. Handed out by the Router.
+// From the most significant bit: a 48-bit counter, the venue's Id in 8 bits
+// and the Sink in the last 8, so ids sort in the order they were handed out
+// and name their venue and sink.
+using SubscriptionId = u64;
+
+// How many ids the Router can hand out: counters run from 1 to this, the
+// largest that fits 48 bits. MakeSubscriptionId() needs a counter in that
+// range.
+constexpr u64 kMaxSubscriptionsAllowed{(u64{1} << 48) - 1};
+
+constexpr SubscriptionId MakeSubscriptionId(u64 counter, Id venue, Sink sink) {
+  return counter << 16 | u64{std::to_underlying(venue)} << 8 |
+         std::to_underlying(sink);
+}
+
+constexpr u64 CounterOf(SubscriptionId id) {
+  return id >> 16;
+}
+
+constexpr Id VenueOf(SubscriptionId id) {
+  return static_cast<Id>(id >> 8 & 0xFF);
+}
+
+constexpr Sink SinkOf(SubscriptionId id) {
+  return static_cast<Sink>(id & 0xFF);
+}
+
+// One subscription, as listed to the frontend. Its sink is SinkOf(id).
 struct SubscriptionInfo {
   SubscriptionId id;
-  // E.g. "BTC/USD".
-  std::string symbol;
-  u32 depth;
-  Sink sink;
-  // When it was made, nanoseconds since the Unix epoch.
+  l2::BookSpec book;
   i64 start_time_ns;
 };
 
@@ -64,13 +90,13 @@ struct Error {
     kUnknownSymbol,
     // No subscription has the id.
     kUnknownId,
-    // The subscription exists, but with another sink than the command named.
-    kSinkMismatch,
     // The symbol already has a subscription, as a venue streams a pair at
     // one depth only.
     kSymbolInUse,
     // The venue could not be reached, or answered unexpectedly.
     kVenueFailed,
+    // The Router has handed out kMaxSubscriptionsAllowed ids.
+    kIdsExhausted,
   };
 
   Code code;
@@ -79,7 +105,7 @@ struct Error {
 };
 
 // Builds a subscription's receiver once the pair's precision is known.
-using ReceiverFactory =
+using ReceiverFactoryCallback =
     std::move_only_function<std::unique_ptr<core::Receiver<l2::Message>>(
         const l2::PairPrecision&)>;
 
@@ -99,25 +125,19 @@ class Manager {
   // Whether it is connected and nothing has failed since.
   virtual bool healthy() const = 0;
 
-  // Streams `symbol`'s book at `depth` into the receiver `make_receiver`
-  // builds, under `id`, which must be unused. Returns the id now streaming
-  // the pair: `id`, or an existing kRecord subscription's when `sink` is
-  // kRecord and the pair is already recorded at `depth`, in which case
-  // nothing is built. Fails if the symbol already has another subscription.
+  // Streams `book` into the receiver `make_receiver` builds, under `id`,
+  // which must be unused and name this venue. Returns the id now streaming
+  // the pair: `id`, or an existing recording's when SinkOf(id) is kRecord and
+  // the pair is already recorded at the same depth, in which case nothing is
+  // built. Fails if the symbol already has another subscription.
   virtual std::expected<SubscriptionId, Error> Subscribe(
       SubscriptionId id,
-      const std::string& symbol,
-      u32 depth,
-      Sink sink,
-      ReceiverFactory make_receiver) = 0;
+      l2::BookSpec book,
+      ReceiverFactoryCallback make_receiver) = 0;
 
   // Drops the subscription and its receiver, closing a recording. Fails with
-  // kUnknownId if no subscription has `id`, or kSinkMismatch if it has
-  // another sink than `sink`, so that a command meant for a recording cannot
-  // stop a live feed. Checked under the same lock Subscribe() resolves an
-  // existing recording under, so the two cannot interleave.
-  virtual std::expected<void, Error> Unsubscribe(SubscriptionId id,
-                                                 Sink sink) = 0;
+  // kUnknownId if no subscription has `id`.
+  virtual std::expected<void, Error> Unsubscribe(SubscriptionId id) = 0;
 
   // Every subscription, ordered by id.
   virtual std::vector<SubscriptionInfo> List() const = 0;

@@ -26,12 +26,12 @@ TEST(WireTest, MapsEveryVenueErrorCode) {
             wire::CommandError::CODE_UNKNOWN_SYMBOL);
   EXPECT_EQ(code(venue::Error::Code::kUnknownId),
             wire::CommandError::CODE_UNKNOWN_ID);
-  EXPECT_EQ(code(venue::Error::Code::kSinkMismatch),
-            wire::CommandError::CODE_SINK_MISMATCH);
   EXPECT_EQ(code(venue::Error::Code::kSymbolInUse),
             wire::CommandError::CODE_SYMBOL_IN_USE);
   EXPECT_EQ(code(venue::Error::Code::kVenueFailed),
             wire::CommandError::CODE_VENUE_FAILED);
+  EXPECT_EQ(code(venue::Error::Code::kIdsExhausted),
+            wire::CommandError::CODE_IDS_EXHAUSTED);
 }
 
 TEST(WireTest, KeepsTheErrorDetail) {

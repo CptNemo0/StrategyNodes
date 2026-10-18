@@ -34,6 +34,7 @@
 #include <utility>
 
 #include "core/aliasing.h"
+#include "core/debug_log.h"
 #include "core/spsc.h"
 #include "core/unix_time.h"
 
@@ -161,6 +162,8 @@ class WebsocketFeed::Connection {
                     [](boost::beast::error_code) {});
     ioc_.run_for(kCloseTimeout);
     if (!ioc_.stopped()) {
+      DEBUG_LOG("No close handshake reply within {}, dropping the socket",
+                kCloseTimeout);
       // The venue did not finish the handshake; aborts every operation.
       boost::beast::get_lowest_layer(ws_).close();
       ioc_.run();
@@ -192,6 +195,8 @@ void WebsocketFeed::Connect() {
   try {
     raw_log_ = OpenRawLog(raw_log_stem_);
     connection_ = std::make_unique<Connection>(tls_, endpoint_);
+    DEBUG_LOG("Websocket open to {}:{}{}", endpoint_.host, endpoint_.port,
+              endpoint_.target);
     stop_ = false;
     thread_ = std::jthread{[this] { Run(); }};
   } catch (...) {

@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "core/aliasing.h"
+#include "core/debug_log.h"
 #include "core/decimal.h"
 #include "core/pipeline_status.h"
 #include "core/receiver.h"
@@ -222,7 +223,9 @@ void L2MessageParser::Dispatch(const net::RawFrame& frame) {
   if (!is_snapshot && routed.awaiting_snapshot) {
     return;
   }
-  routed.awaiting_snapshot = false;
+  if (std::exchange(routed.awaiting_snapshot, false)) {
+    DEBUG_LOG("{}: snapshot received, streaming", route->first);
+  }
 
   l2::Message message{.type = is_snapshot ? l2::Message::Type::kSnapshot
                                           : l2::Message::Type::kUpdate,

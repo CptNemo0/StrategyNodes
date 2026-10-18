@@ -33,10 +33,12 @@
 #include <utility>
 
 #include "core/aliasing.h"
+#include "core/debug_log.h"
 #include "core/unix_time.h"
 #include "frontend/outbox.h"
 #include "frontend/watcher.h"
 #include "frontend/wire.h"
+#include "l2/book_spec.h"
 #include "venue/manager.h"
 #include "venue/router.h"
 
@@ -162,6 +164,7 @@ class Server::Session : public Watcher,
         self->Close();
         return;
       }
+      DEBUG_LOG("Session {} opened", static_cast<const void*>(self.get()));
       self->Read();
       self->ArmHeartbeat();
     });
@@ -187,6 +190,7 @@ class Server::Session : public Watcher,
       return;
     }
     closed_ = true;
+    DEBUG_LOG("Session {} closed", static_cast<const void*>(this));
     heartbeat_.cancel();
     // Not a close handshake: the client is gone, misbehaving, or the server
     // is shutting down. The queued frames stay until the pending write
@@ -214,6 +218,8 @@ class Server::Session : public Watcher,
         return;
       }
       if (self->pending_commands_ >= kMaxPendingCommands) {
+        DEBUG_LOG("Session {} has {} commands pending, dropping it",
+                  static_cast<const void*>(self.get()), kMaxPendingCommands);
         self->Close();
         return;
       }
@@ -251,6 +257,8 @@ class Server::Session : public Watcher,
         return;
       }
       if (outgoing_.size() >= kMaxBacklogFrames) {
+        DEBUG_LOG("Session {} has {} frames queued, dropping it",
+                  static_cast<const void*>(this), kMaxBacklogFrames);
         Close();
         return;
       }
@@ -417,13 +425,16 @@ void Server::Accept() {
 
 void Server::Execute(const std::shared_ptr<Session>& session,
                      wire::ClientCommand command) {
-  boost::asio::post(session->commands(),
-                    [this, session, command = std::move(command)] {
-                      wire::CommandResult result = Run(*session, command);
-                      result.set_request_id(command.request_id());
-                      session->Send(MakePayload(result));
-                      session->CommandDone();
-                    });
+  boost::asio::post(session->commands(), [this, session,
+                                          command = std::move(command)] {
+    wire::CommandResult result = Run(*session, command);
+    DEBUG_LOG("Session {}: {} -> {}", static_cast<const void*>(session.get()),
+              command.ShortDebugString(),
+              result.has_error() ? result.error().detail() : "ok");
+    result.set_request_id(command.request_id());
+    session->Send(MakePayload(result));
+    session->CommandDone();
+  });
 }
 
 wire::CommandResult Server::Run(Session& session,
@@ -460,16 +471,16 @@ wire::CommandResult Server::Start(const wire::Start& start) {
     return Failure(wire::CommandError::CODE_INVALID_COMMAND,
                    "Start needs a known venue and sink");
   }
-  return ToResult(*sink == venue::Sink::kRecord
-                      ? router_.Subscribe<venue::Sink::kRecord>(
-                            *venue, start.symbol(), start.depth())
-                      : router_.Subscribe<venue::Sink::kLive>(
-                            *venue, start.symbol(), start.depth()),
-                  [](venue::SubscriptionId id) {
-                    wire::CommandResult result;
-                    result.set_started_id(id);
-                    return result;
-                  });
+  l2::BookSpec book{.symbol = start.symbol(), .depth = start.depth()};
+  return ToResult(
+      *sink == venue::Sink::kRecord
+          ? router_.Subscribe<venue::Sink::kRecord>(*venue, std::move(book))
+          : router_.Subscribe<venue::Sink::kLive>(*venue, std::move(book)),
+      [](venue::SubscriptionId id) {
+        wire::CommandResult result;
+        result.set_started_id(id);
+        return result;
+      });
 }
 
 wire::CommandResult Server::Stop(const wire::Stop& stop) {
@@ -478,7 +489,17 @@ wire::CommandResult Server::Stop(const wire::Stop& stop) {
     return Failure(wire::CommandError::CODE_INVALID_COMMAND,
                    "Stop needs a known sink");
   }
-  return ToResult(router_.Unsubscribe(stop.id(), *sink), [] { return Ok(); });
+  // The id carries its sink, so a Stop naming another one came from a
+  // frontend that mixed up its ids; refused so a command meant for a
+  // recording cannot stop a live feed.
+  if (venue::SinkOf(stop.id()) != *sink) {
+    std::println(stderr, "Frontend server: Stop of {} names {}, not its sink",
+                 stop.id(), venue::SinkName(*sink));
+    return Failure(wire::CommandError::CODE_SINK_MISMATCH,
+                   std::format("Subscription {} is not {}", stop.id(),
+                               venue::SinkName(*sink)));
+  }
+  return ToResult(router_.Unsubscribe(stop.id()), [] { return Ok(); });
 }
 
 wire::CommandResult Server::List() const {
@@ -489,9 +510,9 @@ wire::CommandResult Server::List() const {
     wire::Subscription& added = *subscriptions.Add();
     added.set_id(listing.subscription.id);
     added.set_venue(ToWire(listing.venue));
-    added.set_symbol(listing.subscription.symbol);
-    added.set_depth(listing.subscription.depth);
-    added.set_sink(ToWire(listing.subscription.sink));
+    added.set_symbol(listing.subscription.book.symbol);
+    added.set_depth(listing.subscription.book.depth);
+    added.set_sink(ToWire(venue::SinkOf(listing.subscription.id)));
     added.set_start_time_ns(listing.subscription.start_time_ns);
   }
   return result;
@@ -501,12 +522,13 @@ wire::CommandResult Server::Watch(Session& session, const wire::Watch& watch) {
   if (!outbox_.Watch(watch.id(), session.shared_from_this())) {
     // Tells a recording apart from a typo. Checks the sink, as a live
     // subscription under the id may have started since the Outbox was asked.
-    return std::ranges::any_of(router_.List(),
-                               [&watch](const venue::Router::Listing& listing) {
-                                 return listing.subscription.id == watch.id() &&
-                                        listing.subscription.sink ==
-                                            venue::Sink::kRecord;
-                               })
+    return std::ranges::any_of(
+               router_.List(),
+               [&watch](const venue::Router::Listing& listing) {
+                 return listing.subscription.id == watch.id() &&
+                        venue::SinkOf(listing.subscription.id) ==
+                            venue::Sink::kRecord;
+               })
                ? Failure(wire::CommandError::CODE_SINK_MISMATCH,
                          std::format("Subscription {} is a recording, not a "
                                      "live feed",

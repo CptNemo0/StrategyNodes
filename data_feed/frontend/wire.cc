@@ -48,12 +48,12 @@ wire::CommandError::Code ToWire(venue::Error::Code code) {
       return wire::CommandError::CODE_UNKNOWN_SYMBOL;
     case venue::Error::Code::kUnknownId:
       return wire::CommandError::CODE_UNKNOWN_ID;
-    case venue::Error::Code::kSinkMismatch:
-      return wire::CommandError::CODE_SINK_MISMATCH;
     case venue::Error::Code::kSymbolInUse:
       return wire::CommandError::CODE_SYMBOL_IN_USE;
     case venue::Error::Code::kVenueFailed:
       return wire::CommandError::CODE_VENUE_FAILED;
+    case venue::Error::Code::kIdsExhausted:
+      return wire::CommandError::CODE_IDS_EXHAUSTED;
   }
   return wire::CommandError::CODE_UNSPECIFIED;
 }
@@ -62,14 +62,13 @@ wire::CommandError::Code ToWire(venue::Error::Code code) {
 
 wire::StreamInfo MakeStreamInfo(venue::SubscriptionId id,
                                 std::string_view venue,
-                                std::string_view symbol,
-                                u32 depth,
+                                const l2::BookSpec& book,
                                 const l2::PairPrecision& precision) {
   wire::StreamInfo info;
   info.set_stream_id(id);
-  info.set_symbol(std::string{symbol});
+  info.set_symbol(book.symbol);
   info.set_venue(std::string{venue});
-  info.set_depth(depth);
+  info.set_depth(book.depth);
   info.set_price_decimals(precision.price_decimals);
   info.set_qty_decimals(precision.qty_decimals);
   return info;

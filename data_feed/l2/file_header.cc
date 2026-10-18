@@ -4,6 +4,7 @@
 #include <string_view>
 
 #include "core/aliasing.h"
+#include "l2/book_spec.h"
 #include "l2/pair_precision.h"
 
 namespace l2 {
@@ -22,18 +23,17 @@ FileHeader::Text ToFixedText(std::string_view value) {
 }  // namespace
 
 FileHeader MakeFileHeader(std::string_view venue,
-                          std::string_view symbol,
-                          u32 depth,
+                          const BookSpec& book,
                           const PairPrecision& precision,
                           i64 start_time_ns) {
   return FileHeader{.magic = FileHeader::kMagic,
                     .format_version = FileHeader::kFormatVersion,
-                    .depth = depth,
+                    .depth = book.depth,
                     .price_decimals = precision.price_decimals,
                     .qty_decimals = precision.qty_decimals,
                     .start_time_ns = start_time_ns,
                     .venue = ToFixedText(venue),
-                    .symbol = ToFixedText(symbol)};
+                    .symbol = ToFixedText(book.symbol)};
 }
 
 }  // namespace l2

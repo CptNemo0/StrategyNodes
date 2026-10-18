@@ -14,9 +14,11 @@
 #include <utility>
 
 #include "core/aliasing.h"
+#include "core/debug_log.h"
 #include "core/receiver.h"
 #include "core/spsc.h"
 #include "core/unix_time.h"
+#include "l2/book_spec.h"
 #include "l2/file_header.h"
 #include "l2/message.h"
 #include "l2/pair_precision.h"
@@ -46,19 +48,15 @@ std::filesystem::path FinalPath(std::string_view stem, i64 end) {
 }  // namespace
 
 FileWriter::FileWriter(std::string_view venue,
-                       const std::string& symbol,
-                       u32 depth,
+                       const BookSpec& book,
                        const PairPrecision& precision)
-    : symbol_stem_{symbol |
+    : symbol_stem_{book.symbol |
                    std::views::filter([](char c) { return c != '/'; }) |
                    std::ranges::to<std::string>()},
-      header_{MakeFileHeader(venue,
-                             symbol,
-                             depth,
-                             precision,
-                             /*start_time_ns=*/0)} {
+      header_{MakeFileHeader(venue, book, precision, /*start_time_ns=*/0)} {
   Open();
-  thread_ = std::jthread{[this, symbol](const std::stop_token& stop) {
+  thread_ = std::jthread{[this,
+                          symbol = book.symbol](const std::stop_token& stop) {
     core::Drain(
         stop, symbol, queue_, [this](const Entry& entry) { Consume(entry); },
         [this] { failed_ = true; });
@@ -114,6 +112,7 @@ void FileWriter::Open() {
         std::format("Cannot write header to {}", path_.string())};
   }
   messages_in_file_ = 0;
+  DEBUG_LOG("Recording to {}", path_.string());
 }
 
 void FileWriter::Write(const Message& message) {
@@ -132,7 +131,10 @@ void FileWriter::Close() {
     return;
   }
   output_.close();
-  std::filesystem::rename(path_, FinalPath(file_stem_, UnixTimeNow()));
+  const std::filesystem::path final_path = FinalPath(file_stem_, UnixTimeNow());
+  std::filesystem::rename(path_, final_path);
+  DEBUG_LOG("Closed {} after {} messages", final_path.string(),
+            messages_in_file_);
 }
 
 }  // namespace l2

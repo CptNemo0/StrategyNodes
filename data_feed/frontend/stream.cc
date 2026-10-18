@@ -16,6 +16,7 @@
 #include "frontend/watcher.h"
 #include "frontend/wire.h"
 #include "l2/book.h"
+#include "l2/book_spec.h"
 #include "l2/message.h"
 #include "l2/pair_precision.h"
 #include "venue/manager.h"
@@ -39,30 +40,28 @@ wire::FeedStatus MakeFeedStatus(
 
 Stream::Stream(venue::SubscriptionId id,
                std::string_view venue,
-               const std::string& symbol,
-               u32 depth,
+               const l2::BookSpec& book,
                const l2::PairPrecision& precision)
     : id_{id},
-      stream_info_{
-          MakePayload(MakeStreamInfo(id, venue, symbol, depth, precision))},
+      stream_info_{MakePayload(MakeStreamInfo(id, venue, book, precision))},
       disconnected_{MakePayload(MakeFeedStatus(
           wire::FeedStatus::STATE_DISCONNECTED,
           std::format("Lost the connection to {}; {} resumes with a snapshot "
                       "once it is back",
                       venue,
-                      symbol),
+                      book.symbol),
           {}))},
       resubscribing_{MakePayload(MakeFeedStatus(
           wire::FeedStatus::STATE_DEGRADED,
           std::format("{} stopped matching {}'s checksum; it resumes with a "
                       "fresh snapshot",
-                      symbol,
+                      book.symbol,
                       venue),
           {}))},
       live_{MakePayload(MakeFeedStatus(wire::FeedStatus::STATE_LIVE,
-                                       std::format("{} is back", symbol),
+                                       std::format("{} is back", book.symbol),
                                        std::span{&id_, 1}))},
-      book_{depth} {}
+      book_{book.depth} {}
 
 void Stream::Receive(const l2::Message& message) {
   const std::scoped_lock lock{mutex_};

@@ -6,9 +6,11 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <string>
 #include <string_view>
 
 #include "core/aliasing.h"
+#include "l2/book_spec.h"
 #include "l2/pair_precision.h"
 
 namespace l2 {
@@ -22,8 +24,8 @@ constexpr PairPrecision kBtcPrecision{.price_decimals = 1, .qty_decimals = 8};
 constexpr i64 kStartTimeNs = 1'790'508'579'799'080'000;
 
 FileHeader MakeHeader(std::string_view venue, std::string_view symbol) {
-  return MakeFileHeader(venue, symbol, /*depth=*/100, kBtcPrecision,
-                        kStartTimeNs);
+  return MakeFileHeader(venue, {.symbol = std::string{symbol}, .depth = 100},
+                        kBtcPrecision, kStartTimeNs);
 }
 
 // `text` as a fixed width field: zero padded, or cut at kTextSize.

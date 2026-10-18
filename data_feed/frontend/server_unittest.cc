@@ -7,7 +7,6 @@
 #include <exception>
 #include <stop_token>
 
-
 #ifdef _WIN32
 #include <winsock2.h>
 #endif
@@ -38,6 +37,7 @@
 #include "core/receiver.h"
 #include "frontend/outbox.h"
 #include "frontend/wire.h"
+#include "l2/book_spec.h"
 #include "l2/message.h"
 #include "l2/pair_precision.h"
 #include "venue/manager.h"
@@ -54,6 +54,13 @@ using ::testing::Test;
 constexpr l2::PairPrecision kPrecision{.price_decimals = 1, .qty_decimals = 8};
 // How long the client waits for a frame before the test fails.
 constexpr u32 kReadTimeoutMs = 5000;
+// The ids the Router hands out first and second.
+constexpr venue::SubscriptionId kFirstLive =
+    venue::MakeSubscriptionId(1, venue::Id::kKraken, venue::Sink::kLive);
+constexpr venue::SubscriptionId kFirstRecord =
+    venue::MakeSubscriptionId(1, venue::Id::kKraken, venue::Sink::kRecord);
+constexpr venue::SubscriptionId kSecondRecord =
+    venue::MakeSubscriptionId(2, venue::Id::kKraken, venue::Sink::kRecord);
 
 // A venue that is always healthy and builds each live subscription's receiver
 // at once, so a test can feed it messages. Recordings get no receiver, which
@@ -68,38 +75,31 @@ class FakeManager : public venue::Manager {
 
   std::expected<venue::SubscriptionId, venue::Error> Subscribe(
       venue::SubscriptionId id,
-      const std::string& symbol,
-      u32 depth,
-      venue::Sink sink,
-      venue::ReceiverFactory make_receiver) override {
+      l2::BookSpec book,
+      venue::ReceiverFactoryCallback make_receiver) override {
     const std::scoped_lock lock{mutex_};
-    if (depth == 0) {
+    if (book.depth == 0) {
       return std::unexpected{venue::Error{
           .code = venue::Error::Code::kInvalidDepth, .detail = "no depth 0"}};
     }
     subscriptions_.emplace(
-        id, Subscription{.info = venue::SubscriptionInfo{.id = id,
-                                                         .symbol = symbol,
-                                                         .depth = depth,
-                                                         .sink = sink,
-                                                         .start_time_ns = 42},
-                         .receiver = sink == venue::Sink::kLive
-                                         ? make_receiver(kPrecision)
-                                         : nullptr});
+        id,
+        Subscription{.info = venue::SubscriptionInfo{.id = id,
+                                                     .book = std::move(book),
+                                                     .start_time_ns = 42},
+                     .receiver = venue::SinkOf(id) == venue::Sink::kLive
+                                     ? make_receiver(kPrecision)
+                                     : nullptr});
     return id;
   }
 
-  std::expected<void, venue::Error> Unsubscribe(venue::SubscriptionId id,
-                                                venue::Sink sink) override {
+  std::expected<void, venue::Error> Unsubscribe(
+      venue::SubscriptionId id) override {
     const std::scoped_lock lock{mutex_};
     const auto subscription = subscriptions_.find(id);
     if (subscription == subscriptions_.end()) {
       return std::unexpected{venue::Error{
           .code = venue::Error::Code::kUnknownId, .detail = "not here"}};
-    }
-    if (subscription->second.info.sink != sink) {
-      return std::unexpected{venue::Error{
-          .code = venue::Error::Code::kSinkMismatch, .detail = "other sink"}};
     }
     subscriptions_.erase(subscription);
     return {};
@@ -305,15 +305,15 @@ TEST_F(ServerTest, StartsAndListsSubscriptions) {
 
   EXPECT_EQ(
       client.Command(StartCommand("BTC/USD", 10, wire::SINK_LIVE)).started_id(),
-      1u);
+      kFirstLive);
   EXPECT_EQ(client.Command(StartCommand("ETH/USD", 100, wire::SINK_RECORD))
                 .started_id(),
-            2u);
+            kSecondRecord);
 
   const wire::CommandResult result = client.Command(ListCommand());
   ASSERT_THAT(result.subscriptions().subscriptions(), SizeIs(2));
   const wire::Subscription& live = result.subscriptions().subscriptions(0);
-  EXPECT_EQ(live.id(), 1u);
+  EXPECT_EQ(live.id(), kFirstLive);
   EXPECT_EQ(live.venue(), wire::VENUE_KRAKEN);
   EXPECT_EQ(live.symbol(), "BTC/USD");
   EXPECT_EQ(live.depth(), 10u);
@@ -396,27 +396,30 @@ TEST_F(ServerTest, StopsOnlyASubscriptionOfTheSinkNamed) {
   Client client = Connect();
   ASSERT_EQ(
       client.Command(StartCommand("BTC/USD", 10, wire::SINK_LIVE)).started_id(),
-      1u);
+      kFirstLive);
 
-  EXPECT_EQ(client.Command(StopCommand(1, wire::SINK_RECORD)).error().code(),
-            wire::CommandError::CODE_SINK_MISMATCH);
-  EXPECT_TRUE(client.Command(StopCommand(1, wire::SINK_LIVE)).has_ok());
-  EXPECT_EQ(client.Command(StopCommand(1, wire::SINK_LIVE)).error().code(),
-            wire::CommandError::CODE_UNKNOWN_ID);
+  EXPECT_EQ(
+      client.Command(StopCommand(kFirstLive, wire::SINK_RECORD)).error().code(),
+      wire::CommandError::CODE_SINK_MISMATCH);
+  EXPECT_TRUE(
+      client.Command(StopCommand(kFirstLive, wire::SINK_LIVE)).has_ok());
+  EXPECT_EQ(
+      client.Command(StopCommand(kFirstLive, wire::SINK_LIVE)).error().code(),
+      wire::CommandError::CODE_UNKNOWN_ID);
 }
 
 TEST_F(ServerTest, StreamsAWatchedSubscription) {
   Client client = Connect();
   ASSERT_EQ(
       client.Command(StartCommand("BTC/USD", 10, wire::SINK_LIVE)).started_id(),
-      1u);
+      kFirstLive);
 
-  ASSERT_TRUE(client.Command(WatchCommand(1)).has_ok());
-  fake_.Feed(1, Snapshot(100));
+  ASSERT_TRUE(client.Command(WatchCommand(kFirstLive)).has_ok());
+  fake_.Feed(kFirstLive, Snapshot(100));
   const wire::MarketDataEvent book = client.ReadUntil(
       [](const wire::MarketDataEvent& event) { return event.has_book(); });
 
-  EXPECT_EQ(book.book().stream_id(), 1u);
+  EXPECT_EQ(book.book().stream_id(), kFirstLive);
   EXPECT_EQ(book.book().kind(), wire::Book::KIND_SNAPSHOT);
   ASSERT_THAT(book.book().bids(), SizeIs(1));
   EXPECT_EQ(book.book().bids(0).price(), 100);
@@ -445,10 +448,10 @@ TEST_F(ServerTest, StopsStreamingOnceUnwatched) {
   Client client = Connect();
   ASSERT_TRUE(client.Command(StartCommand("BTC/USD", 10, wire::SINK_LIVE))
                   .started_id());
-  ASSERT_TRUE(client.Command(WatchCommand(1)).has_ok());
+  ASSERT_TRUE(client.Command(WatchCommand(kFirstLive)).has_ok());
 
   ASSERT_TRUE(client.Command(UnwatchCommand()).has_ok());
-  fake_.Feed(1, Snapshot(100));
+  fake_.Feed(kFirstLive, Snapshot(100));
 
   // Anything sent before the List's answer arrives before it.
   ASSERT_TRUE(client.Command(ListCommand()).has_subscriptions());
@@ -461,9 +464,9 @@ TEST_F(ServerTest, TellsAWatcherWhenTheVenueConnectionEnds) {
   Client client = Connect();
   ASSERT_TRUE(client.Command(StartCommand("BTC/USD", 10, wire::SINK_LIVE))
                   .started_id());
-  ASSERT_TRUE(client.Command(WatchCommand(1)).has_ok());
+  ASSERT_TRUE(client.Command(WatchCommand(kFirstLive)).has_ok());
 
-  fake_.Disconnect(1);
+  fake_.Disconnect(kFirstLive);
 
   EXPECT_EQ(client
                 .ReadUntil([](const wire::MarketDataEvent& event) {
@@ -485,9 +488,9 @@ TEST_F(ServerTest, RefusesToWatchARecording) {
   Client client = Connect();
   ASSERT_EQ(client.Command(StartCommand("BTC/USD", 10, wire::SINK_RECORD))
                 .started_id(),
-            1u);
+            kFirstRecord);
 
-  EXPECT_EQ(client.Command(WatchCommand(1)).error().code(),
+  EXPECT_EQ(client.Command(WatchCommand(kFirstRecord)).error().code(),
             wire::CommandError::CODE_SINK_MISMATCH);
 }
 
@@ -496,11 +499,11 @@ TEST_F(ServerTest, KeepsStreamingToOtherClientsWhenOneLeaves) {
   Client staying = Connect();
   ASSERT_TRUE(leaving.Command(StartCommand("BTC/USD", 10, wire::SINK_LIVE))
                   .started_id());
-  ASSERT_TRUE(leaving.Command(WatchCommand(1)).has_ok());
-  ASSERT_TRUE(staying.Command(WatchCommand(1)).has_ok());
+  ASSERT_TRUE(leaving.Command(WatchCommand(kFirstLive)).has_ok());
+  ASSERT_TRUE(staying.Command(WatchCommand(kFirstLive)).has_ok());
 
   leaving.Close();
-  fake_.Feed(1, Snapshot(100));
+  fake_.Feed(kFirstLive, Snapshot(100));
 
   EXPECT_EQ(staying
                 .ReadUntil([](const wire::MarketDataEvent& event) {
@@ -516,12 +519,12 @@ TEST_F(ServerTest, ShutsDownWithAClientStillWatching) {
   Client client = Connect();
   ASSERT_TRUE(client.Command(StartCommand("BTC/USD", 10, wire::SINK_LIVE))
                   .started_id());
-  ASSERT_TRUE(client.Command(WatchCommand(1)).has_ok());
+  ASSERT_TRUE(client.Command(WatchCommand(kFirstLive)).has_ok());
 
   server_.reset();
 
   // The transmitter outlives the server, and must not reach its sessions.
-  fake_.Feed(1, Snapshot(100));
+  fake_.Feed(kFirstLive, Snapshot(100));
 }
 
 // Clients watch and leave while the parser thread streams into the
@@ -540,7 +543,7 @@ TEST_F(ServerTest, SurvivesClientsWatchingAndLeavingMidStream) {
   std::jthread parser{[&](const std::stop_token& stop) {
     for (i64 price = 1; !stop.stop_requested(); ++price) {
       try {
-        fake_.Feed(1, Snapshot(price));
+        fake_.Feed(kFirstLive, Snapshot(price));
       } catch (const std::exception&) {
         ++failures;
       }
@@ -549,7 +552,7 @@ TEST_F(ServerTest, SurvivesClientsWatchingAndLeavingMidStream) {
 
   for (int round = 0; round < kClients; ++round) {
     Client client = Connect();
-    ASSERT_TRUE(client.Command(WatchCommand(1)).has_ok());
+    ASSERT_TRUE(client.Command(WatchCommand(kFirstLive)).has_ok());
     if (round % 3 == 0) {
       ASSERT_TRUE(client.Command(UnwatchCommand()).has_ok());
     }

@@ -23,6 +23,7 @@
 #include "core/aliasing.h"
 #include "core/receiver.h"
 #include "core/unix_time.h"
+#include "l2/book_spec.h"
 #include "l2/file_header.h"
 #include "l2/message.h"
 #include "l2/pair_precision.h"
@@ -140,7 +141,8 @@ class FileWriterTest : public Test {
 // While recording, the file is named after the pair (without its '/') and
 // the start second recorded in its header.
 TEST_F(FileWriterTest, OpensTheRecordingUnderItsStartTimeWithoutTheSlash) {
-  const FileWriter writer{kVenue, "BTC/USD", kDepth, kPrecision};
+  const FileWriter writer{
+      kVenue, {.symbol = "BTC/USD", .depth = kDepth}, kPrecision};
 
   const std::optional<std::string> name = OnlyRecordingName();
   ASSERT_TRUE(name.has_value());
@@ -154,7 +156,8 @@ TEST_F(FileWriterTest, OpensTheRecordingUnderItsStartTimeWithoutTheSlash) {
 TEST_F(FileWriterTest, StartsTheRecordingWithItsHeader) {
   const i64 before = core::UnixNanosNow();
   {
-    const FileWriter writer{kVenue, "BTC/USD", kDepth, kPrecision};
+    const FileWriter writer{
+        kVenue, {.symbol = "BTC/USD", .depth = kDepth}, kPrecision};
   }
   const i64 after = core::UnixNanosNow();
 
@@ -166,15 +169,16 @@ TEST_F(FileWriterTest, StartsTheRecordingWithItsHeader) {
   // The start time is the only field the test cannot know up front.
   const i64 start_time_ns = ReadHeader(bytes).start_time_ns;
   EXPECT_THAT(start_time_ns, AllOf(Ge(before), Le(after)));
-  EXPECT_THAT(bytes,
-              ElementsAreArray(HeaderBytes(MakeFileHeader(
-                  kVenue, "BTC/USD", kDepth, kPrecision, start_time_ns))));
+  EXPECT_THAT(bytes, ElementsAreArray(HeaderBytes(MakeFileHeader(
+                         kVenue, {.symbol = "BTC/USD", .depth = kDepth},
+                         kPrecision, start_time_ns))));
 }
 
 // Closing the writer renames the recording to carry its end second too.
 TEST_F(FileWriterTest, RenamesTheRecordingWithItsEndTimeOnceClosed) {
   const i64 before_close_s = [] {
-    const FileWriter writer{kVenue, "ETH/USD", kDepth, kPrecision};
+    const FileWriter writer{
+        kVenue, {.symbol = "ETH/USD", .depth = kDepth}, kPrecision};
     return core::UnixNanosNow() / kNanosPerSecond;
   }();
   const i64 after_close_s = core::UnixNanosNow() / kNanosPerSecond;
@@ -196,7 +200,8 @@ TEST_F(FileWriterTest, AppendsEveryReceivedMessageInOrder) {
   // Several times the queue capacity, so the writer thread has to keep up.
   constexpr i64 kMessageCount = 3 * FileWriter::kMaxQueuedMessages;
   {
-    FileWriter writer{kVenue, "BTC/USD", kDepth, kPrecision};
+    FileWriter writer{
+        kVenue, {.symbol = "BTC/USD", .depth = kDepth}, kPrecision};
     for (const i64 price : std::views::iota(i64{0}, kMessageCount)) {
       writer.Receive(MakeUpdate(price));
     }
@@ -213,7 +218,7 @@ TEST_F(FileWriterTest, AppendsEveryReceivedMessageInOrder) {
 // Each message reaches the file while it is still open, so a killed
 // process loses nothing already written.
 TEST_F(FileWriterTest, FlushesEachMessageBeforeTheRecordingCloses) {
-  FileWriter writer{kVenue, "BTC/USD", kDepth, kPrecision};
+  FileWriter writer{kVenue, {.symbol = "BTC/USD", .depth = kDepth}, kPrecision};
   writer.Receive(MakeUpdate(42));
 
   const std::optional<std::string> name = OnlyRecordingName();
@@ -238,8 +243,8 @@ TEST_F(FileWriterTest, FlushesEachMessageBeforeTheRecordingCloses) {
 // its own pair's messages.
 TEST_F(FileWriterTest, KeepsConcurrentRecordingsOfDifferentPairsApart) {
   {
-    FileWriter btc{kVenue, "BTC/USD", kDepth, kPrecision};
-    FileWriter eth{kVenue, "ETH/USD", kDepth, kPrecision};
+    FileWriter btc{kVenue, {.symbol = "BTC/USD", .depth = kDepth}, kPrecision};
+    FileWriter eth{kVenue, {.symbol = "ETH/USD", .depth = kDepth}, kPrecision};
     btc.Receive(MakeUpdate(1));
     eth.Receive(MakeUpdate(2));
     eth.Receive(MakeUpdate(3));
@@ -259,7 +264,8 @@ TEST_F(FileWriterTest, KeepsConcurrentRecordingsOfDifferentPairsApart) {
 // the next connection's first message opens another, with its own header.
 TEST_F(FileWriterTest, StartsANewFileForEachConnection) {
   {
-    FileWriter writer{kVenue, "BTC/USD", kDepth, kPrecision};
+    FileWriter writer{
+        kVenue, {.symbol = "BTC/USD", .depth = kDepth}, kPrecision};
     writer.Receive(MakeUpdate(1));
     writer.OnGap(core::Gap::kDisconnected);
     writer.Receive(MakeUpdate(2));
@@ -288,7 +294,8 @@ TEST_F(FileWriterTest, StartsANewFileForEachConnection) {
 // each final name already taken gets a suffix instead of replacing it.
 TEST_F(FileWriterTest, NeverReplacesARecordingOfTheSameSeconds) {
   {
-    FileWriter writer{kVenue, "BTC/USD", kDepth, kPrecision};
+    FileWriter writer{
+        kVenue, {.symbol = "BTC/USD", .depth = kDepth}, kPrecision};
     for (const i64 price : std::views::iota(i64{0}, 5)) {
       writer.Receive(MakeUpdate(price));
       writer.OnGap(core::Gap::kDisconnected);
@@ -302,7 +309,8 @@ TEST_F(FileWriterTest, NeverReplacesARecordingOfTheSameSeconds) {
 // leave no empty files: the file waiting for messages is kept.
 TEST_F(FileWriterTest, KeepsAFileWithoutMessagesForTheNextConnection) {
   {
-    FileWriter writer{kVenue, "BTC/USD", kDepth, kPrecision};
+    FileWriter writer{
+        kVenue, {.symbol = "BTC/USD", .depth = kDepth}, kPrecision};
     writer.OnGap(core::Gap::kDisconnected);
     writer.OnGap(core::Gap::kDisconnected);
     writer.Receive(MakeUpdate(7));
@@ -317,7 +325,8 @@ TEST_F(FileWriterTest, KeepsAFileWithoutMessagesForTheNextConnection) {
 // A connection ending last, as at shutdown, opens no file after it.
 TEST_F(FileWriterTest, OpensNoFileAfterTheLastConnection) {
   {
-    FileWriter writer{kVenue, "BTC/USD", kDepth, kPrecision};
+    FileWriter writer{
+        kVenue, {.symbol = "BTC/USD", .depth = kDepth}, kPrecision};
     writer.Receive(MakeUpdate(1));
     writer.OnGap(core::Gap::kDisconnected);
   }

@@ -26,6 +26,7 @@
 #include "core/unix_time.h"
 #include "frontend/outbox.h"
 #include "frontend/transmitter.h"
+#include "l2/book_spec.h"
 #include "l2/file_writer.h"
 #include "l2/message.h"
 #include "l2/pair_precision.h"
@@ -48,6 +49,13 @@ constexpr std::chrono::seconds kWaitLimit{5};
 // Short enough that tests needing a reconnect do not wait for the default.
 constexpr Backoff kFastBackoff{.initial = std::chrono::milliseconds{1},
                                .max = std::chrono::milliseconds{1}};
+// The ids the Router hands out first and second.
+constexpr SubscriptionId kFirstRecord =
+    MakeSubscriptionId(1, Id::kKraken, Sink::kRecord);
+constexpr SubscriptionId kFirstLive =
+    MakeSubscriptionId(1, Id::kKraken, Sink::kLive);
+constexpr SubscriptionId kSecondLive =
+    MakeSubscriptionId(2, Id::kKraken, Sink::kLive);
 
 // A venue that does what each test tells it and records what it was asked.
 // The Router's supervisor thread calls it too, so every member is guarded.
@@ -72,36 +80,26 @@ class FakeManager : public Manager {
 
   std::expected<SubscriptionId, Error> Subscribe(
       SubscriptionId id,
-      const std::string& symbol,
-      u32 depth,
-      Sink sink,
-      ReceiverFactory make_receiver) override {
+      l2::BookSpec book,
+      ReceiverFactoryCallback make_receiver) override {
     const std::scoped_lock lock{mutex_};
     if (std::optional<std::expected<SubscriptionId, Error>> result =
             std::exchange(next_subscribe_result_, std::nullopt)) {
       return *std::move(result);
     }
-    subscriptions_.push_back(SubscriptionInfo{.id = id,
-                                              .symbol = symbol,
-                                              .depth = depth,
-                                              .sink = sink,
-                                              .start_time_ns = 0});
+    subscriptions_.push_back(SubscriptionInfo{
+        .id = id, .book = std::move(book), .start_time_ns = 0});
     factories_.push_back(std::move(make_receiver));
     return id;
   }
 
-  std::expected<void, Error> Unsubscribe(SubscriptionId id,
-                                         Sink sink) override {
+  std::expected<void, Error> Unsubscribe(SubscriptionId id) override {
     const std::scoped_lock lock{mutex_};
     const auto subscription =
         std::ranges::find(subscriptions_, id, &SubscriptionInfo::id);
     if (subscription == subscriptions_.end()) {
       return std::unexpected{
           Error{.code = Error::Code::kUnknownId, .detail = "not here"}};
-    }
-    if (subscription->sink != sink) {
-      return std::unexpected{
-          Error{.code = Error::Code::kSinkMismatch, .detail = "other sink"}};
     }
     subscriptions_.erase(subscription);
     unsubscribed_.push_back(id);
@@ -159,7 +157,7 @@ class FakeManager : public Manager {
   std::optional<std::expected<SubscriptionId, Error>> next_subscribe_result_;
   std::vector<std::chrono::steady_clock::time_point> connect_attempts_;
   std::vector<SubscriptionInfo> subscriptions_;
-  std::vector<ReceiverFactory> factories_;
+  std::vector<ReceiverFactoryCallback> factories_;
   std::vector<SubscriptionId> unsubscribed_;
   std::expected<PairList, Error> pairs_;
 };
@@ -199,27 +197,49 @@ class RouterTest : public Test {
 TEST_F(RouterTest, HandsOutIncreasingIds) {
   Start();
 
-  EXPECT_EQ(router().Subscribe<Sink::kRecord>(Id::kKraken, "BTC/USD", 100), 1u);
-  EXPECT_EQ(router().Subscribe<Sink::kLive>(Id::kKraken, "ETH/USD", 10), 2u);
+  EXPECT_EQ(router().Subscribe<Sink::kRecord>(
+                Id::kKraken, {.symbol = "BTC/USD", .depth = 100}),
+            kFirstRecord);
+  EXPECT_EQ(router().Subscribe<Sink::kLive>(Id::kKraken,
+                                            {.symbol = "ETH/USD", .depth = 10}),
+            kSecondLive);
+}
+
+TEST_F(RouterTest, EncodesTheVenueAndSinkInTheId) {
+  Start();
+
+  const std::expected<SubscriptionId, Error> subscribed =
+      router().Subscribe<Sink::kRecord>(Id::kKraken,
+                                        {.symbol = "BTC/USD", .depth = 100});
+
+  ASSERT_TRUE(subscribed);
+  EXPECT_EQ(CounterOf(*subscribed), 1u);
+  EXPECT_EQ(VenueOf(*subscribed), Id::kKraken);
+  EXPECT_EQ(SinkOf(*subscribed), Sink::kRecord);
 }
 
 TEST_F(RouterTest, ListsSubscriptionsWithTheirVenue) {
   Start();
-  ASSERT_TRUE(router().Subscribe<Sink::kRecord>(Id::kKraken, "BTC/USD", 100));
-  ASSERT_TRUE(router().Subscribe<Sink::kLive>(Id::kKraken, "ETH/USD", 10));
+  ASSERT_TRUE(router().Subscribe<Sink::kRecord>(
+      Id::kKraken, {.symbol = "BTC/USD", .depth = 100}));
+  ASSERT_TRUE(router().Subscribe<Sink::kLive>(
+      Id::kKraken, {.symbol = "ETH/USD", .depth = 10}));
 
-  EXPECT_THAT(router().List(),
-              ElementsAre(FieldsAre(Id::kKraken, FieldsAre(1u, "BTC/USD", 100u,
-                                                           Sink::kRecord, 0)),
-                          FieldsAre(Id::kKraken, FieldsAre(2u, "ETH/USD", 10u,
-                                                           Sink::kLive, 0))));
+  EXPECT_THAT(
+      router().List(),
+      ElementsAre(
+          FieldsAre(Id::kKraken,
+                    FieldsAre(kFirstRecord, FieldsAre("BTC/USD", 100u), 0)),
+          FieldsAre(Id::kKraken,
+                    FieldsAre(kSecondLive, FieldsAre("ETH/USD", 10u), 0))));
 }
 
 TEST_F(RouterTest, RefusesAVenueItHasNoManagerFor) {
   router_.emplace(Router::Managers{}, outbox_, kFastBackoff);
 
   const std::expected<SubscriptionId, Error> subscribed =
-      router().Subscribe<Sink::kLive>(Id::kKraken, "BTC/USD", 100);
+      router().Subscribe<Sink::kLive>(Id::kKraken,
+                                      {.symbol = "BTC/USD", .depth = 100});
 
   ASSERT_FALSE(subscribed);
   EXPECT_EQ(subscribed.error().code, Error::Code::kUnknownVenue);
@@ -231,13 +251,14 @@ TEST_F(RouterTest, PassesOnTheVenuesError) {
   Start();
 
   const std::expected<SubscriptionId, Error> subscribed =
-      router().Subscribe<Sink::kLive>(Id::kKraken, "BTC/USD", 7);
+      router().Subscribe<Sink::kLive>(Id::kKraken,
+                                      {.symbol = "BTC/USD", .depth = 7});
 
   ASSERT_FALSE(subscribed);
   EXPECT_THAT(subscribed.error(),
               FieldsAre(Error::Code::kInvalidDepth, "no depth 7"));
   // The id it would have had names nothing.
-  EXPECT_EQ(router().Unsubscribe(1, Sink::kLive).error().code,
+  EXPECT_EQ(router().Unsubscribe(kFirstLive).error().code,
             Error::Code::kUnknownId);
 }
 
@@ -276,28 +297,34 @@ TEST_F(RouterTest, RefusesToListPairsOfAVenueItHasNoManagerFor) {
 
 TEST_F(RouterTest, ReturnsTheIdOfARecordingAlreadyRunning) {
   Start();
-  ASSERT_EQ(router().Subscribe<Sink::kRecord>(Id::kKraken, "BTC/USD", 100), 1u);
-  fake_.AnswerNextSubscribe(1);
+  ASSERT_EQ(router().Subscribe<Sink::kRecord>(
+                Id::kKraken, {.symbol = "BTC/USD", .depth = 100}),
+            kFirstRecord);
+  fake_.AnswerNextSubscribe(kFirstRecord);
 
-  EXPECT_EQ(router().Subscribe<Sink::kRecord>(Id::kKraken, "BTC/USD", 100), 1u);
-  EXPECT_TRUE(router().Unsubscribe(1, Sink::kRecord));
+  EXPECT_EQ(router().Subscribe<Sink::kRecord>(
+                Id::kKraken, {.symbol = "BTC/USD", .depth = 100}),
+            kFirstRecord);
+  EXPECT_TRUE(router().Unsubscribe(kFirstRecord));
 }
 
 TEST_F(RouterTest, UnsubscribesFromTheVenue) {
   Start();
-  ASSERT_TRUE(router().Subscribe<Sink::kLive>(Id::kKraken, "BTC/USD", 100));
+  ASSERT_TRUE(router().Subscribe<Sink::kLive>(
+      Id::kKraken, {.symbol = "BTC/USD", .depth = 100}));
 
-  EXPECT_TRUE(router().Unsubscribe(1, Sink::kLive));
-  EXPECT_THAT(fake_.unsubscribed(), ElementsAre(1u));
+  EXPECT_TRUE(router().Unsubscribe(kFirstLive));
+  EXPECT_THAT(fake_.unsubscribed(), ElementsAre(kFirstLive));
   EXPECT_THAT(router().List(), IsEmpty());
 }
 
 TEST_F(RouterTest, ForgetsAnIdOnceUnsubscribed) {
   Start();
-  ASSERT_TRUE(router().Subscribe<Sink::kLive>(Id::kKraken, "BTC/USD", 100));
-  ASSERT_TRUE(router().Unsubscribe(1, Sink::kLive));
+  ASSERT_TRUE(router().Subscribe<Sink::kLive>(
+      Id::kKraken, {.symbol = "BTC/USD", .depth = 100}));
+  ASSERT_TRUE(router().Unsubscribe(kFirstLive));
 
-  EXPECT_EQ(router().Unsubscribe(1, Sink::kLive).error().code,
+  EXPECT_EQ(router().Unsubscribe(kFirstLive).error().code,
             Error::Code::kUnknownId);
   EXPECT_THAT(fake_.unsubscribed(), SizeIs(1));
 }
@@ -305,30 +332,24 @@ TEST_F(RouterTest, ForgetsAnIdOnceUnsubscribed) {
 TEST_F(RouterTest, RefusesAnUnknownId) {
   Start();
 
-  EXPECT_EQ(router().Unsubscribe(42, Sink::kLive).error().code,
+  EXPECT_EQ(router()
+                .Unsubscribe(MakeSubscriptionId(42, Id::kKraken, Sink::kLive))
+                .error()
+                .code,
             Error::Code::kUnknownId);
 }
 
 TEST_F(RouterTest, RefusesAnUnknownIdWithoutAnyVenue) {
   router_.emplace(Router::Managers{}, outbox_, kFastBackoff);
 
-  EXPECT_EQ(router().Unsubscribe(1, Sink::kLive).error().code,
+  EXPECT_EQ(router().Unsubscribe(kFirstLive).error().code,
             Error::Code::kUnknownId);
-}
-
-TEST_F(RouterTest, PassesOnTheVenuesSinkMismatch) {
-  Start();
-  ASSERT_TRUE(router().Subscribe<Sink::kLive>(Id::kKraken, "BTC/USD", 100));
-
-  EXPECT_EQ(router().Unsubscribe(1, Sink::kRecord).error().code,
-            Error::Code::kSinkMismatch);
-  EXPECT_THAT(fake_.unsubscribed(), IsEmpty());
-  EXPECT_THAT(router().List(), SizeIs(1));
 }
 
 TEST_F(RouterTest, BuildsATransmitterForALiveFeed) {
   Start();
-  ASSERT_TRUE(router().Subscribe<Sink::kLive>(Id::kKraken, "BTC/USD", 100));
+  ASSERT_TRUE(router().Subscribe<Sink::kLive>(
+      Id::kKraken, {.symbol = "BTC/USD", .depth = 100}));
 
   EXPECT_THAT(
       dynamic_cast<frontend::Transmitter*>(fake_.BuildLastReceiver().get()),
@@ -362,7 +383,8 @@ TEST_F(RouterTest, BuildsAFileWriterForARecording) {
   };
   const ScratchDirectory scratch;
   Start();
-  ASSERT_TRUE(router().Subscribe<Sink::kRecord>(Id::kKraken, "BTC/USD", 100));
+  ASSERT_TRUE(router().Subscribe<Sink::kRecord>(
+      Id::kKraken, {.symbol = "BTC/USD", .depth = 100}));
 
   // The writer is gone by the end of the statement, before the directory.
   EXPECT_THAT(dynamic_cast<l2::FileWriter*>(fake_.BuildLastReceiver().get()),

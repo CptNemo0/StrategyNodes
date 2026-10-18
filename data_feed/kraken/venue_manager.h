@@ -21,6 +21,7 @@
 #include "kraken/credentials.h"
 #include "kraken/l2_message_parser.h"
 #include "kraken/websocket_token_generator.h"
+#include "l2/book_spec.h"
 #include "l2/message.h"
 #include "net/raw_frame.h"
 #include "net/websocket_feed.h"
@@ -50,7 +51,7 @@ namespace kraken {
 // disconnected, and each subscription either fully set up or fully torn down,
 // even when it throws. Subscriptions outlive connections: they are sent again
 // on every Connect(). Destruction disconnects and drops every subscription.
-class VenueManager : public venue::Manager {
+class VenueManager final : public venue::Manager {
  public:
   VenueManager();
 
@@ -74,19 +75,17 @@ class VenueManager : public venue::Manager {
   // Connected, and neither the feed nor the parser died since.
   bool healthy() const override;
 
-  // Starts with a snapshot. `depth` must be one of kL2Depths. Fetches the
+  // Starts with a snapshot. The depth must be one of kL2Depths. Fetches the
   // pair's precision from the venue, so it blocks for a REST round trip.
   // Throws std::logic_error if `id` is in use.
   std::expected<venue::SubscriptionId, venue::Error> Subscribe(
       venue::SubscriptionId id,
-      const std::string& symbol,
-      u32 depth,
-      venue::Sink sink,
-      venue::ReceiverFactory make_receiver) override;
+      l2::BookSpec book,
+      venue::ReceiverFactoryCallback make_receiver) override;
 
   // Also unsubscribes from the pair.
-  std::expected<void, venue::Error> Unsubscribe(venue::SubscriptionId id,
-                                                venue::Sink sink) override;
+  std::expected<void, venue::Error> Unsubscribe(
+      venue::SubscriptionId id) override;
 
   std::vector<venue::SubscriptionInfo> List() const override;
 
@@ -95,11 +94,9 @@ class VenueManager : public venue::Manager {
   std::expected<venue::PairList, venue::Error> ListPairs() override;
 
  private:
-  // The one subscriber to a pair.
+  // The one subscriber to a pair. Its sink is venue::SinkOf() of its id.
   struct Subscription {
-    std::string symbol;
-    u32 depth;
-    venue::Sink sink;
+    l2::BookSpec book;
     i64 start_time_ns;
     std::unique_ptr<core::Receiver<l2::Message>> receiver;
   };
@@ -110,14 +107,13 @@ class VenueManager : public venue::Manager {
   using Taken =
       std::optional<std::expected<venue::SubscriptionId, venue::Error>>;
 
-  // What Subscribe() returns when `id` or `symbol` are already taken: the
-  // existing recording's id if `sink` is kRecord and the pair is recorded at
-  // `depth`, or else kSymbolInUse. Nothing if the subscription may go ahead.
-  // Throws std::logic_error if `id` is in use, which only a caller bug does.
+  // What Subscribe() returns when `id` or the book's symbol are already
+  // taken: the existing recording's id if `id` is a recording's too and the
+  // pair is recorded at the book's depth, or else kSymbolInUse. Nothing if
+  // the subscription may go ahead. Throws std::logic_error if `id` is in use,
+  // which only a caller bug does.
   Taken ResolveTakenLocked(venue::SubscriptionId id,
-                           std::string_view symbol,
-                           u32 depth,
-                           venue::Sink sink) const;
+                           const l2::BookSpec& book) const;
 
   // The subscription to `symbol`, or end().
   Subscriptions::const_iterator FindSymbolLocked(std::string_view symbol) const;

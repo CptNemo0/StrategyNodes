@@ -12,6 +12,7 @@
 #include "frontend/watcher.h"
 #include "frontend/wire.h"
 #include "l2/book.h"
+#include "l2/book_spec.h"
 #include "l2/message.h"
 #include "l2/pair_precision.h"
 #include "venue/manager.h"
@@ -22,7 +23,7 @@ namespace frontend {
 // Transmitter feeds it; the Outbox hands it watchers. Shared between the two,
 // so the Outbox can let go of its own lock before a Watch builds a snapshot.
 //
-// Keeps the book as the messages leave it, truncated to `depth` as the
+// Keeps the book as the messages leave it, truncated to its depth as the
 // venue's checksum expects, so that a client can start watching at any time:
 // it gets a StreamInfo and a snapshot of the book, then every message after
 // it. Each message is serialized once, however many clients watch.
@@ -39,8 +40,7 @@ class Stream {
  public:
   Stream(venue::SubscriptionId id,
          std::string_view venue,
-         const std::string& symbol,
-         u32 depth,
+         const l2::BookSpec& book,
          const l2::PairPrecision& precision);
 
   Stream(const Stream&) = delete;

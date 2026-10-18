@@ -8,6 +8,7 @@
 #include <thread>
 #include <utility>
 
+#include "core/debug_log.h"
 #include "frontend/outbox.h"
 #include "frontend/server.h"
 #include "kraken/venue_manager.h"
@@ -40,6 +41,7 @@ int main() {
     while (!stop_requested) {
       std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
+    DEBUG_LOG("Stop requested, shutting down");
   } catch (const std::exception& e) {
     std::println(stderr, "Fatal: {}", e.what());
     return 1;

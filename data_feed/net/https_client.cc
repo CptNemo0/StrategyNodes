@@ -25,6 +25,7 @@
 #include <stdexcept>
 #include <string_view>
 //
+#include "core/debug_log.h"
 #include "net/tls_context.h"
 
 namespace net {
@@ -53,6 +54,10 @@ HttpsClientOneShot::Result HttpsClientOneShot::MakeRequest(
 
   http::write(stream, body);
   http::read(stream, buffer, res);
+  DEBUG_LOG("{} https://{}{} -> {}, {} bytes",
+            std::string_view{body.method_string()}, host,
+            std::string_view{body.target()}, res.result_int(),
+            res.body().size());
 
   beast::error_code ec;
   stream.shutdown(ec);

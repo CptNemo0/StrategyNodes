@@ -2,6 +2,7 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <market_data.pb.h>
 
 #include <memory>
 #include <mutex>
@@ -15,8 +16,10 @@
 #include "frontend/outbox.h"
 #include "frontend/watcher.h"
 #include "frontend/wire.h"
+#include "l2/book_spec.h"
 #include "l2/message.h"
 #include "l2/pair_precision.h"
+#include "venue/manager.h"
 
 namespace frontend {
 namespace {
@@ -27,7 +30,8 @@ using ::testing::SizeIs;
 using ::testing::Test;
 
 constexpr l2::PairPrecision kPrecision{.price_decimals = 1, .qty_decimals = 8};
-constexpr venue::SubscriptionId kId = 7;
+constexpr venue::SubscriptionId kId =
+    venue::MakeSubscriptionId(7, venue::Id::kKraken, venue::Sink::kLive);
 constexpr u32 kDepth = 3;
 
 // Keeps every payload it is sent, and the event each one frames.
@@ -87,7 +91,8 @@ class TransmitterTest : public Test {
  protected:
   Transmitter& transmitter() {
     if (!transmitter_) {
-      transmitter_.emplace(outbox_, kId, "kraken", "BTC/USD", kDepth,
+      transmitter_.emplace(outbox_, kId, "kraken",
+                           l2::BookSpec{.symbol = "BTC/USD", .depth = kDepth},
                            kPrecision);
     }
     return *transmitter_;
@@ -120,11 +125,21 @@ TEST_F(TransmitterTest, RegistersWithTheOutboxWhileItExists) {
 TEST_F(TransmitterTest, RefusesAnIdAlreadyRegistered) {
   transmitter();
 
-  EXPECT_THROW(
-      Transmitter(outbox_, kId, "kraken", "ETH/USD", kDepth, kPrecision),
-      std::logic_error);
+  EXPECT_THROW(Transmitter(outbox_, kId, "kraken",
+                           {.symbol = "ETH/USD", .depth = kDepth}, kPrecision),
+               std::logic_error);
   // The first one is still the one registered.
   EXPECT_TRUE(outbox_.Watch(kId, watcher_));
+}
+
+TEST_F(TransmitterTest, RefusesARecordingsId) {
+  constexpr venue::SubscriptionId kRecordingId =
+      venue::MakeSubscriptionId(8, venue::Id::kKraken, venue::Sink::kRecord);
+
+  EXPECT_THROW(Transmitter(outbox_, kRecordingId, "kraken",
+                           {.symbol = "BTC/USD", .depth = kDepth}, kPrecision),
+               std::logic_error);
+  EXPECT_FALSE(outbox_.Watch(kRecordingId, watcher_));
 }
 
 TEST_F(TransmitterTest, SendsOnlyAStreamInfoBeforeTheFirstSnapshot) {

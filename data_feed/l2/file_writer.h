@@ -15,6 +15,7 @@
 
 #include "core/aliasing.h"
 #include "core/receiver.h"
+#include "l2/book_spec.h"
 #include "l2/file_header.h"
 #include "l2/message.h"
 #include "l2/pair_precision.h"
@@ -55,8 +56,7 @@ class FileWriter : public core::Receiver<Message> {
   // `venue` (e.g. "kraken") and the rest are recorded in each file header.
   // Opens the first file at once, throwing if it cannot.
   FileWriter(std::string_view venue,
-             const std::string& symbol,
-             u32 depth,
+             const BookSpec& book,
              const PairPrecision& precision);
 
   FileWriter(const FileWriter&) = delete;

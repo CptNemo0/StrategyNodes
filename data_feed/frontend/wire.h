@@ -8,6 +8,7 @@
 #include <string_view>
 
 #include "core/aliasing.h"
+#include "l2/book_spec.h"
 #include "l2/message.h"
 #include "l2/pair_precision.h"
 #include "market_data.pb.h"
@@ -22,8 +23,7 @@ namespace wire = ::trading::market_data::v1;
 // Describes the stream `id` carries, so a client can decode its books.
 wire::StreamInfo MakeStreamInfo(venue::SubscriptionId id,
                                 std::string_view venue,
-                                std::string_view symbol,
-                                u32 depth,
+                                const l2::BookSpec& book,
                                 const l2::PairPrecision& precision);
 
 // `message` as a Book of stream `id`, its levels in the order the venue sent

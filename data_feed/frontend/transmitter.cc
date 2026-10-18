@@ -1,6 +1,8 @@
 #include "frontend/transmitter.h"
 
+#include <format>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 
@@ -8,6 +10,7 @@
 #include "core/receiver.h"
 #include "frontend/outbox.h"
 #include "frontend/stream.h"
+#include "l2/book_spec.h"
 #include "l2/message.h"
 #include "l2/pair_precision.h"
 #include "venue/manager.h"
@@ -17,12 +20,15 @@ namespace frontend {
 Transmitter::Transmitter(Outbox& outbox,
                          venue::SubscriptionId id,
                          std::string_view venue,
-                         const std::string& symbol,
-                         u32 depth,
+                         const l2::BookSpec& book,
                          const l2::PairPrecision& precision)
     : outbox_{outbox},
       id_{id},
-      stream_{std::make_shared<Stream>(id, venue, symbol, depth, precision)} {
+      stream_{std::make_shared<Stream>(id, venue, book, precision)} {
+  if (venue::SinkOf(id_) != venue::Sink::kLive) {
+    throw std::logic_error{
+        std::format("Subscription {} is not a live feed", id_)};
+  }
   outbox_.Register(id_, stream_);
 }
 

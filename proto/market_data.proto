@@ -205,6 +205,8 @@ message CommandError {
     CODE_SYMBOL_IN_USE = 6;
     // The backend's connection to the venue failed.
     CODE_VENUE_FAILED = 7;
+    // The backend has handed out every subscription id it can.
+    CODE_IDS_EXHAUSTED = 8;
   }
 
   Code code = 1;
