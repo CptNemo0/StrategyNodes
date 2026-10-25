@@ -129,6 +129,10 @@ class L2Parser final : private L2Decoder::Output {
   // Held for every delivery, so Detach() cannot return mid-delivery.
   std::mutex routes_mutex_;
   std::flat_map<std::string, Route, std::less<>> routes_;
+  // When Dispatch() handed the frame being decoded to the decoder, on the
+  // system clock so it compares with the venue's timestamps. Parser thread
+  // only.
+  i64 parse_start_ns_{0};
   std::jthread thread_;
 };
 

@@ -3,6 +3,7 @@
 #include <csignal>
 #include <cstdio>
 #include <exception>
+#include <format>
 #include <memory>
 #include <print>
 #include <thread>
@@ -10,9 +11,11 @@
 
 #include "coinbase/adapter.h"
 #include "core/debug_log.h"
+#include "core/unix_time.h"
 #include "frontend/outbox.h"
 #include "frontend/server.h"
 #include "kraken/adapter.h"
+#include "timing/aggregator.h"
 #include "venue/l2_manager.h"
 #include "venue/manager.h"
 #include "venue/router.h"
@@ -29,6 +32,8 @@ int main() {
   std::signal(SIGINT, [](int) { stop_requested = true; });
 
   try {
+    timing::Aggregator::Start(
+        std::format("timings-{}.txt", core::UnixNanosNow()));
     venue::Router::Managers managers;
     managers.emplace(venue::Id::kKraken,
                      std::make_unique<venue::L2Manager>(
@@ -53,5 +58,7 @@ int main() {
     return 1;
   }
 
+  // After every venue is torn down, so the file holds their last samples.
+  timing::Aggregator::Stop();
   return 0;
 }

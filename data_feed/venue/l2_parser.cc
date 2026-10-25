@@ -18,10 +18,12 @@
 #include "core/pipeline_status.h"
 #include "core/receiver.h"
 #include "core/spsc.h"
+#include "core/unix_time.h"
 #include "l2/book.h"
 #include "l2/message.h"
 #include "l2/pair_precision.h"
 #include "net/raw_frame.h"
+#include "timing/aggregator.h"
 #include "venue/l2_decoder.h"
 
 namespace venue {
@@ -89,7 +91,10 @@ void L2Parser::Detach(std::string_view symbol) {
 
 void L2Parser::Dispatch(const net::RawFrame& frame) {
   const std::scoped_lock lock{routes_mutex_};
+  parse_start_ns_ = core::UnixNanosNow();
   decoder_->Decode(frame, *this);
+  timing::Aggregator::Record(timing::Interval::kReceiveToParseComplete,
+                             core::UnixNanosNow() - parse_start_ns_);
 }
 
 const l2::PairPrecision* L2Parser::Find(std::string_view symbol,
@@ -104,6 +109,13 @@ void L2Parser::Emit(l2::Message message) {
     return;
   }
   Route& routed = route->second;
+  // Only updates: a snapshot's venue time may be that of an older change.
+  // Zero means the venue sent none.
+  if (message.type == l2::Message::Type::kUpdate &&
+      message.venue_time_ns != 0) {
+    timing::Aggregator::Record(timing::Interval::kExchangeToParseStart,
+                               parse_start_ns_ - message.venue_time_ns);
+  }
   if (std::exchange(routed.awaiting_snapshot, false)) {
     DEBUG_LOG("{}: snapshot received, streaming", route->first);
   }
